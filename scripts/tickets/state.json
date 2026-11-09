@@ -73,7 +73,16 @@
     "S2-03": 113,
     "S2-04": 114,
     "S1-57": 115,
-    "S1-50": 119
+    "S1-50": 119,
+    "S1-58": 148,
+    "S1-59": 149,
+    "S1-60": 150,
+    "S1-61": 151,
+    "S2-05": 152,
+    "S2-06": 153,
+    "S2-07": 154,
+    "S2-08": 155,
+    "S2-09": 156
   },
   "linked": [
     "S1-01",
@@ -136,20 +145,29 @@
     "S2-03",
     "S2-04",
     "S1-57",
-    "S1-50"
+    "S1-50",
+    "S1-58",
+    "S1-59",
+    "S1-60",
+    "S1-61",
+    "S2-05",
+    "S2-06",
+    "S2-07",
+    "S2-08",
+    "S2-09"
   ],
   "hashes": {
     "E1": "3f1ea51a0fcf4845e6d965b7826cc4309ab81709bb4886426641467551b4630a",
-    "E2": "345d45918d95fe02266661470a0a4219584712b3c1d886d5d8e9e331d3648e19",
+    "E2": "5ceb6f60fc0f39f4eeaf8a316132ed4416fed59289ed9802f5d86f3b8e3b5bc4",
     "E3": "ca1222bb48443b6d0f59dfe86115c26a28c1c489c4ec828848466deccad80dce",
     "E4": "541919b4fce5716e7e173eb688fe3a24d7dccc4e7a79d6f521b00e6e827a5aa5",
     "E5": "e54ad4d54363b5cf1129fc0cacba3f9b674dec801bd9d48bc6707da47d35ba7c",
-    "E6": "7ae6a1e8e23ee0d898ab63ebdcb97e13d749af0974b288a603f29f5aab03fba2",
-    "E7": "ed4f53e1952a56706d81bd808064171c231550fe3f691ed40f61899ef3d7f652",
+    "E6": "462ddf3c822d07a15632c1d2e6896dd564cd33967cd2886b4186e8dc10e7cd24",
+    "E7": "e1f4b7f459f4f447684d5be559deec9ae3148321844314ea86b4b5e59219423c",
     "E8": "c8566d8b216b470afc83355042cff93037d062adf868c7d3b75b8dc53d1b6f33",
-    "E9": "6a10ab5170991d446e82a168254dccb02d29b2521c9acd2fd69136800d2c12f8",
+    "E9": "ad6af959cc08aff1adb4136d68327c8efbf709f4f66daee07bdc81101b595232",
     "E10": "2dc36c76976be98dd42e1e407b31407ffb502dd405ab576227dc9a51e1ec1193",
-    "E11": "d62f1f5d371076e069b96602165d46b7bec24efea203397c95c863d9a328d76d",
+    "E11": "9947c69209fcd516facc6c4bb66cdf0fd7e67285fb3209d1bfdad2677de20ad1",
     "E12": "ec2606b569ee7236a6a1f83e3ee44a06ea0b476b433e8e93cfe34e515d3ea196",
     "E13": "3fa369884dc16ccefa0db04f19550d338a4246c8f825f0e076bc602e72839f7f",
     "S1-01": "aa0e849a5f1a5229753e893a4410ae712a926eb6431b5f55c06280a5fb588044",
@@ -212,7 +230,16 @@
     "S1-56": "e04047f10b196be0219a33659b28db2dae2e90ce98cde8dc6a9e07c7d0d15703",
     "S2-01": "57f13f5b0785060c40d02e8254510cfa04d326f2478c94a20cb2b556b7b278ce",
     "S1-57": "cb5afba847668a7339a7729866ec0a863e5d440eac594276c1769db11e2951c1",
-    "S1-50": "7c6c00f42c68559ac43202caa0bb8ecd31f746b40cd9cbc2ba3da8bc4f4e29c9"
+    "S1-50": "7c6c00f42c68559ac43202caa0bb8ecd31f746b40cd9cbc2ba3da8bc4f4e29c9",
+    "S1-58": "e87fe79173c8e84e8d66505d7af5f5056d75505ac4f64276b1845b355dee5409",
+    "S2-05": "43292d4942da2875515865af06e201028838c49aeff25bf93c23668e39d6c5b2",
+    "S2-07": "75121343602791c3edde6cc906e31074bb4cfb302291f3e13cb5d3fd99e4d9b2",
+    "S2-08": "f59262ce220c66b416377509c18e93f671bb69b6c990cbe9ac583d9e39f51123",
+    "S2-09": "5d7a5ca48648e071414bb6c6a591927a30d9234b90eb336858c8fc66da50841e",
+    "S1-59": "13822f4005abc3807846b8c102036a320ef207e8b6ce7eb717adfc5c9b95f96e",
+    "S1-60": "836527f40e45778d46243e446eb9493069c14ffb66f35b926eeb27e7d7aef974",
+    "S1-61": "97ff43d034824f357b26a36ee9c2ef5b17045208d1b67f122f9381fb113c31ef",
+    "S2-06": "382711ad5a588b5dfe25af0e621dbee3714fdcea4fa939339cbf1a1bd80151a7"
   },
   "meta": {
     "E1": {
@@ -265,11 +292,10 @@
       ]
     },
     "E6": {
-      "title": "Epic: COMPARE: Activity Metrics & Trend Detection",
+      "title": "Epic: ANALYZE: Sector Mix, Gaps & Recommendations",
       "milestone": null,
       "labels": [
-        "Activity Scoring",
-        "Trend Detection",
+        "Ecosystem Analysis",
         "epic",
         "must"
       ]
@@ -315,14 +341,14 @@
       ]
     },
     "E11": {
-      "title": "Epic: Classification, Relationships & Optional AI",
+      "title": "Epic: Classification & Relationships",
       "milestone": null,
       "labels": [
-        "AI Summaries",
+        "Industry Classification",
         "Relationship Mapping",
         "Topic Classification",
-        "could",
-        "epic"
+        "epic",
+        "must"
       ]
     },
     "E12": {
@@ -983,6 +1009,115 @@
         "must",
         "task",
         "team: swe"
+      ]
+    },
+    "S1-58": {
+      "title": "Load linked synthetic test data into the Omerlo test tenant through its MCP",
+      "milestone": "Iteration 4",
+      "labels": [
+        "Data Connectors",
+        "Release 1",
+        "must",
+        "risk: medium",
+        "team: data-ai",
+        "user-story"
+      ]
+    },
+    "S1-59": {
+      "title": "Map organizations to one standard industry list",
+      "milestone": "Iteration 4",
+      "labels": [
+        "Industry Classification",
+        "Release 1",
+        "must",
+        "risk: medium",
+        "team: data-ai",
+        "user-story"
+      ]
+    },
+    "S1-60": {
+      "title": "Calculate a network's sector mix and its gaps",
+      "milestone": "Iteration 4",
+      "labels": [
+        "Ecosystem Analysis",
+        "Release 1",
+        "must",
+        "risk: medium",
+        "team: data-ai",
+        "user-story"
+      ]
+    },
+    "S1-61": {
+      "title": "Show a network's sector mix and gaps on the dashboard",
+      "milestone": "Iteration 4",
+      "labels": [
+        "Dashboard",
+        "Release 1",
+        "must",
+        "risk: low",
+        "team: swe",
+        "user-story"
+      ]
+    },
+    "S2-05": {
+      "title": "Link people to the organizations they work for, with evidence",
+      "milestone": "Iteration 5",
+      "labels": [
+        "Relationship Mapping",
+        "Release 2",
+        "must",
+        "risk: high",
+        "team: data-ai",
+        "user-story"
+      ]
+    },
+    "S2-06": {
+      "title": "Recommend which sectors and organizations to recruit, explained by an AI model",
+      "milestone": "Iteration 6",
+      "labels": [
+        "Ecosystem Analysis",
+        "Release 2",
+        "must",
+        "risk: high",
+        "team: data-ai",
+        "user-story"
+      ]
+    },
+    "S2-07": {
+      "title": "Ask PULSE questions about a network through a chat backed by PULSE's MCP tools",
+      "milestone": "Iteration 7",
+      "labels": [
+        "Ecosystem Analysis",
+        "Release 2",
+        "risk: medium",
+        "should",
+        "team: data-ai",
+        "user-story"
+      ]
+    },
+    "S2-08": {
+      "title": "Log users in and restrict each one to their own network's data",
+      "milestone": "Iteration 5",
+      "labels": [
+        "Admin & Configuration",
+        "Release 2",
+        "must",
+        "risk: medium",
+        "security",
+        "team: infra-security",
+        "user-story"
+      ]
+    },
+    "S2-09": {
+      "title": "Compare a network's sector mix with Statistics Canada business counts for its region",
+      "milestone": "Iteration 5",
+      "labels": [
+        "Ecosystem Analysis",
+        "Release 2",
+        "risk: low",
+        "should",
+        "team: data-ai",
+        "user-story"
       ]
     }
   }
