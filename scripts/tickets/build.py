@@ -22,7 +22,7 @@ from pathlib import Path
 
 from data import EPICS, ISSUES, ITERATIONS, NEW_LABELS, RELEASES
 
-REPO = "antholim/Pulse"
+REPO = "Pulse-Omerlo/Pulse"
 GH = shutil.which("gh") or r"C:\Program Files\GitHub CLI\gh.exe"
 HERE = Path(__file__).parent
 OUT = HERE / "out"
