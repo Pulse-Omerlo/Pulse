@@ -279,7 +279,13 @@ EPICS = [
     dict(
         key="E11",
         title="Epic: Classification & Relationships",
-        labels=["epic", "Industry Classification", "Relationship Mapping", "Topic Classification", "must"],
+        labels=[
+            "epic",
+            "Industry Classification",
+            "Relationship Mapping",
+            "Topic Classification",
+            "must",
+        ],
         goal="Place every organization in a standard industry and link people to the organizations they work for, so a network's sector mix can be measured.",
         scope=[
             "One standard industry list (NAICS, SCIAN in Quebec) and a per-network mapping of its own categories to it",
@@ -2782,7 +2788,14 @@ ISSUES = [
         kind="code",
         points=8,
         title="Log users in and restrict each one to their own network's data",
-        labels=["user-story", "Admin & Configuration", "security", "must", "team: infra-security", "risk: medium"],
+        labels=[
+            "user-story",
+            "Admin & Configuration",
+            "security",
+            "must",
+            "team: infra-security",
+            "risk: medium",
+        ],
         story=(
             "network manager",
             "to sign in and see only my own network's data",
