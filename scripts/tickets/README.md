@@ -12,7 +12,7 @@ Creates and updates the project's GitHub epics and issues from one Python file, 
 ## Requirements
 
 - Python 3.9 or newer
-- [GitHub CLI](https://cli.github.com) logged in (`gh auth login`) with **write** access to `antholim/Pulse`
+- [GitHub CLI](https://cli.github.com) logged in (`gh auth login`) with **write** access to `Pulse-Omerlo/Pulse`
 
 ## Usage
 
