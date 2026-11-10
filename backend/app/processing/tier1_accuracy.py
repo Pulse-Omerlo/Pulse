@@ -1,6 +1,8 @@
 # AI contribution: 50% or more AI-generated
 """Score Tier 1 matches against the synthetic ground truth (dev only)."""
 
+from itertools import combinations
+
 
 def make_pair(first_id, second_id):
     """Put two record ids in the same order so a pair is never counted twice."""
@@ -22,10 +24,9 @@ def predicted_pairs(groups):
     """Every pair of records that Tier 1 put in the same group."""
     pairs = set()
     for group in groups:
-        members = sorted(group)
-        for i in range(len(members)):
-            for j in range(i + 1, len(members)):
-                pairs.add(make_pair(members[i], members[j]))
+        # Sorting first means each pair already comes out in order.
+        for pair in combinations(sorted(group), 2):
+            pairs.add(pair)
     return pairs
 
 
