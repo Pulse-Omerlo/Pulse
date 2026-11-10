@@ -4,6 +4,7 @@
 import argparse
 from uuid import UUID
 
+from app.core.logging import configure_logging, get_logger
 from app.ingestion.mapped import clean_mapped
 from app.ingestion.omerlo.mapping.mappers import map_record
 from app.models import SourceRecord
@@ -17,6 +18,8 @@ from app.processing.tier1_accuracy import combine, expected_pairs, predicted_pai
 from synthetic.omerlo_fixtures import DEFAULT_SEED, OmerloFixtureGenerator
 
 HEADER = "DEV ONLY: synthetic data, not the official evaluation."
+
+logger = get_logger(__name__)
 
 
 def build_records(tenant_number, tenant_data):
@@ -67,42 +70,43 @@ def score_tenant(tenant_number, tenant_data):
     return score(expected, predicted)
 
 
-def print_score(title, result, show_pairs):
-    print(title)  # noqa: T201
-    print(  # noqa: T201
-        f"  precision {result['precision']:.3f}  recall {result['recall']:.3f}"
-        f"  F1 {result['f1']:.3f}"
+def log_score(tenant, result):
+    logger.info(
+        "tier1_score",
+        tenant=tenant,
+        precision=round(result["precision"], 3),
+        recall=round(result["recall"], 3),
+        f1=round(result["f1"], 3),
+        true_positives=result["true_positives"],
+        false_positives=result["false_positives"],
+        false_negatives=result["false_negatives"],
     )
-    print(  # noqa: T201
-        f"  true positives {result['true_positives']}"
-        f"  false positives {result['false_positives']}"
-        f"  false negatives {result['false_negatives']}"
-    )
-    if show_pairs:
-        for pair in result["false_positive_pairs"]:
-            print(f"  false positive: {pair[0]} {pair[1]}")  # noqa: T201
-        for pair in result["false_negative_pairs"]:
-            print(f"  false negative: {pair[0]} {pair[1]}")  # noqa: T201
+
+
+def log_wrong_pairs(tenant, result):
+    for pair in result["false_positive_pairs"]:
+        logger.warning("tier1_false_positive", tenant=tenant, left=pair[0], right=pair[1])
+    for pair in result["false_negative_pairs"]:
+        logger.warning("tier1_false_negative", tenant=tenant, left=pair[0], right=pair[1])
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=HEADER)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="fixture seed")
     args = parser.parse_args(argv)
+    configure_logging()
 
-    print(HEADER)  # noqa: T201
-    print(f"Seed {args.seed}. Each tenant is scored on its own.")  # noqa: T201
-    print()  # noqa: T201
+    logger.info("tier1_report_started", notice=HEADER, seed=args.seed)
 
     scores = []
     tenants = OmerloFixtureGenerator(args.seed).generate()
     for tenant_number, tenant_data in enumerate(tenants, start=1):
         result = score_tenant(tenant_number, tenant_data)
         scores.append(result)
-        print_score(f"Tenant {tenant_data.tenant.slug}", result, show_pairs=True)
-        print()  # noqa: T201
+        log_score(tenant_data.tenant.slug, result)
+        log_wrong_pairs(tenant_data.tenant.slug, result)
 
-    print_score("All tenants", combine(scores), show_pairs=False)
+    log_score("all", combine(scores))
 
 
 if __name__ == "__main__":

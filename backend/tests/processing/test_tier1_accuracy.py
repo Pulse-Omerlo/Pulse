@@ -1,6 +1,7 @@
 # AI contribution: 50% or more AI-generated
 """Tests for the Tier 1 accuracy scoring and report."""
 
+import json
 from uuid import UUID
 
 import pytest
@@ -101,15 +102,32 @@ def test_combine_adds_counts_before_computing_metrics():
     assert total["recall"] == pytest.approx(1 / 3)
 
 
-def test_report_prints_the_dev_only_header_and_each_tenant(capsys):
+def test_report_logs_the_dev_only_notice_and_each_tenant(capsys):
     # Act
     tier1_report.main([])
-    output = capsys.readouterr().out
+    lines = capsys.readouterr().out.splitlines()
+    events = [json.loads(line) for line in lines]
     # Assert
-    assert output.startswith(tier1_report.HEADER)
-    assert "Tenant demo-capitale" in output
-    assert "Tenant demo-estrie" in output
-    assert "All tenants" in output
+    assert events[0]["event"] == "tier1_report_started"
+    assert events[0]["notice"] == tier1_report.HEADER
+    tenants = [event["tenant"] for event in events if event["event"] == "tier1_score"]
+    assert tenants == ["demo-capitale", "demo-estrie", "all"]
+
+
+def test_report_logs_each_wrong_pair_as_a_warning(capsys):
+    # Arrange
+    tier1_report.configure_logging()
+    result = score({("a", "b")}, {("c", "d")})
+    # Act
+    tier1_report.log_wrong_pairs("demo-capitale", result)
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    # Assert
+    assert [event["event"] for event in events] == [
+        "tier1_false_positive",
+        "tier1_false_negative",
+    ]
+    assert events[0]["level"] == "warning"
+    assert (events[0]["left"], events[0]["right"]) == ("c", "d")
 
 
 def organization(number, tenant_number, external_id):
