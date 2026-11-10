@@ -1,0 +1,82 @@
+# NAICS Canada 2022 sectors (2 digits), the shared industry list (SCIAN in French).
+# Source: Statistics Canada, North American Industry Classification System (NAICS) Canada 2022.
+
+[sectors.11]
+en = "Agriculture, forestry, fishing and hunting"
+fr = "Agriculture, foresterie, pêche et chasse"
+
+[sectors.21]
+en = "Mining, quarrying, and oil and gas extraction"
+fr = "Extraction minière, exploitation en carrière, et extraction de pétrole et de gaz"
+
+[sectors.22]
+en = "Utilities"
+fr = "Services publics"
+
+[sectors.23]
+en = "Construction"
+fr = "Construction"
+
+[sectors.31-33]
+en = "Manufacturing"
+fr = "Fabrication"
+
+[sectors.41]
+en = "Wholesale trade"
+fr = "Commerce de gros"
+
+[sectors.44-45]
+en = "Retail trade"
+fr = "Commerce de détail"
+
+[sectors.48-49]
+en = "Transportation and warehousing"
+fr = "Transport et entreposage"
+
+[sectors.51]
+en = "Information and cultural industries"
+fr = "Industrie de l'information et industrie culturelle"
+
+[sectors.52]
+en = "Finance and insurance"
+fr = "Finance et assurances"
+
+[sectors.53]
+en = "Real estate and rental and leasing"
+fr = "Services immobiliers et services de location et de location à bail"
+
+[sectors.54]
+en = "Professional, scientific and technical services"
+fr = "Services professionnels, scientifiques et techniques"
+
+[sectors.55]
+en = "Management of companies and enterprises"
+fr = "Gestion de sociétés et d'entreprises"
+
+[sectors.56]
+en = "Administrative and support, waste management and remediation services"
+fr = "Services administratifs, services de soutien, services de gestion des déchets et services d'assainissement"
+
+[sectors.61]
+en = "Educational services"
+fr = "Services d'enseignement"
+
+[sectors.62]
+en = "Health care and social assistance"
+fr = "Soins de santé et assistance sociale"
+
+[sectors.71]
+en = "Arts, entertainment and recreation"
+fr = "Arts, spectacles et loisirs"
+
+[sectors.72]
+en = "Accommodation and food services"
+fr = "Services d'hébergement et de restauration"
+
+[sectors.81]
+en = "Other services (except public administration)"
+fr = "Autres services (sauf les administrations publiques)"
+
+[sectors.91]
+en = "Public administration"
+fr = "Administrations publiques"

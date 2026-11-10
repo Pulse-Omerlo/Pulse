@@ -1,0 +1,26 @@
+# Keywords that place an organization in a NAICS sector when its categories do not.
+# Matched as whole words on the accent-folded name and description; a trailing s or x is
+# allowed, so "clinique" also matches "cliniques". Leave out words that are common in
+# several sectors (for example "conseil", "brasserie" or "cinema").
+
+[keywords]
+11 = ["ferme", "agricole", "agriculture", "erabliere", "foresterie", "pecherie", "farm", "farming", "forestry", "fishery", "maple"]
+21 = ["mine", "minier", "miniere", "carriere", "mining", "quarry"]
+22 = ["hydro", "electricite", "gaz naturel", "utilities", "electric utility"]
+23 = ["construction", "entrepreneur general", "renovation", "toiture", "excavation", "plomberie", "builder", "roofing", "plumbing"]
+"31-33" = ["fabrication", "manufacturier", "manufacturiere", "usine", "fonderie", "imprimerie", "manufacturing", "manufacturer", "factory", "foundry"]
+41 = ["grossiste", "distributeur", "distributrice", "wholesale", "wholesaler", "distributor"]
+"44-45" = ["boutique", "magasin", "quincaillerie", "epicerie", "librairie", "fleuriste", "retail", "retailer", "store", "hardware", "grocery", "bookstore"]
+"48-49" = ["transport", "camionnage", "logistique", "entreposage", "demenagement", "messagerie", "trucking", "logistics", "warehousing", "courier", "moving"]
+51 = ["media", "journal", "radio", "television", "telecommunication", "edition", "maison d edition", "logiciel", "newspaper", "publishing", "publisher", "software", "broadcasting"]
+52 = ["banque", "caisse", "assurance", "financier", "financiere", "investissement", "placements", "bank", "insurance", "financial", "investment", "wealth"]
+53 = ["immobilier", "immobiliere", "gestion immobiliere", "location d equipement", "real estate", "realty", "property management"]
+54 = ["avocat", "notaire", "comptable", "cpa", "genie conseil", "ingenierie", "architecte", "architecture", "consultation", "services conseils", "agence de communication", "agence marketing", "informatique", "developpement web", "law firm", "lawyer", "accounting", "accountant", "engineering", "architect", "consulting", "marketing agency", "web development", "it services"]
+55 = ["holding", "societe de gestion", "management company"]
+56 = ["nettoyage", "entretien menager", "agence de placement", "recrutement", "gestion des dechets", "recyclage", "agence de securite", "janitorial", "cleaning", "staffing", "recruitment", "waste management", "recycling", "security services"]
+61 = ["ecole", "college", "cegep", "universite", "academie", "centre de formation", "school", "university", "academy", "training centre"]
+62 = ["clinique", "sante", "dentaire", "dentiste", "hopital", "physiotherapie", "medical", "medicale", "chsld", "centre de la petite enfance", "cpe", "garderie", "clinic", "health", "dental", "hospital", "physiotherapy", "daycare", "home care"]
+71 = ["musee", "theatre", "festival", "spectacle", "loisirs", "centre sportif", "golf", "arena", "salle de spectacle", "museum", "recreation", "fitness", "amusement", "sports club"]
+72 = ["hotel", "auberge", "gite", "motel", "restaurant", "resto", "bistro", "cafe", "traiteur", "cabane a sucre", "hebergement", "inn", "catering", "lodging"]
+81 = ["salon de coiffure", "coiffure", "esthetique", "garage", "reparation", "chambre de commerce", "association", "fondation", "syndicat", "paroisse", "eglise", "hair salon", "repair", "foundation", "church", "chamber of commerce"]
+91 = ["ville de", "municipalite", "mrc", "gouvernement", "ministere", "city of", "municipality", "government", "ministry"]

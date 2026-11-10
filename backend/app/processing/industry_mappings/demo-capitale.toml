@@ -1,0 +1,50 @@
+# Categories of the synthetic demo-capitale network (default fixture seed) mapped to NAICS sectors.
+# A category listed with no sectors is known and left out on purpose.
+
+[categories."1ddf5505-ee68-4de9-8954-2cca03a38bd8"]
+name = "Actualités / News"
+sectors = []
+
+[categories."2fd741bb-c94d-4202-8eaf-8ec7fc61adcc"]
+name = "Affaires / Business"
+sectors = []
+
+[categories."5117d097-a40f-4158-905d-5fbc2e97a46d"]
+name = "Culture / Culture"
+sectors = ["71"]
+
+[categories."3b7caeef-6d54-47d5-ab67-6d5c5b02710a"]
+name = "Sports / Sports"
+sectors = ["71"]
+
+[categories."1cce8924-b314-4426-9b24-cf8fdc6aa2f3"]
+name = "Société / Society"
+sectors = []
+
+[categories."778fc941-3e18-4c6a-9a8f-70a9b7ef3116"]
+name = "Santé / Health"
+sectors = ["62"]
+
+[categories."6fc3e597-a483-4a8c-b66e-749f44573ffd"]
+name = "Éducation / Education"
+sectors = ["61"]
+
+[categories."25c1d679-e021-46cc-a9d2-a8027420ee5d"]
+name = "Environnement / Environment"
+sectors = []
+
+[categories."f97e6c5e-7bdb-4454-b3d0-6d2025f47fec"]
+name = "Gastronomie / Food"
+sectors = ["72"]
+
+[categories."ad7b9473-1f0f-411c-a74c-a01bed8c23de"]
+name = "Tourisme / Tourism"
+sectors = ["72", "71"]
+
+[categories."595d907b-1503-4ca3-8c65-b4fb9f884aa3"]
+name = "Technologie / Technology"
+sectors = ["54", "51"]
+
+[categories."a632dbbe-c92a-4499-a773-742e83d43a2d"]
+name = "Communauté / Community"
+sectors = ["81"]
