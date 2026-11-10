@@ -217,7 +217,7 @@ def evidence(match: MatchCandidateData, matched_record_id: UUID) -> list[RuleEvi
     return [
         {
             "rule": match.rule,
-            "RULE_VERSION": RULE_VERSION,
+            "rule_set_version": RULE_VERSION,
             "field": field,
             "value": value,
             "matched_value": value,
@@ -328,7 +328,7 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
 
         def add_candidate(match: MatchCandidateData) -> None:
             nonlocal candidates_created
-            if match.pair in decisions:
+            if match.providePair in decisions:
                 return
 
             candidate = MatchCandidate(
@@ -340,7 +340,7 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
                 status="pending",
             )
             session.add(candidate)
-            decisions[match.pair] = candidate
+            decisions[match.providePair] = candidate
             candidates_created += 1
 
         for group in components(matches):
@@ -419,7 +419,7 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
                             source_record_id=record_id,
                             organization_id=organization_id,
                             method=match.rule,
-                            RULE_WEIGHTS=RULE_WEIGHTS[match.rule],
+                            confidence=RULE_WEIGHTS[match.rule],
                             decided_by=f"tier1:{RULE_VERSION}",
                             evidence=evidence(match, neighbor),
                         )
@@ -433,7 +433,7 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
                             source_record_id=neighbor,
                             organization_id=organization_id,
                             method=match.rule,
-                            RULE_WEIGHTS=RULE_WEIGHTS[match.rule],
+                            confidence=RULE_WEIGHTS[match.rule],
                             decided_by=f"tier1:{RULE_VERSION}",
                             evidence=evidence(match, record_id),
                         )
