@@ -1,27 +1,32 @@
-# AI Declaration: Below 50% AI-generated
+# AI contribution: Below 50% AI-generated
+import tomllib
 from collections import defaultdict, deque
 from collections.abc import Iterable
 from dataclasses import dataclass
 from functools import cache
 from itertools import combinations
 from pathlib import Path
-import tomllib
 from uuid import UUID, uuid4
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
 from app.core.tenancy import bound_to_tenant
 from app.models import MatchCandidate, Organization, OrgLink, SourceRecord, Tenant
 from app.models.resolution import RuleEvidence
 
 # Naming the version of the matching rules used to make a decision
-# If we need to change matching behavior later, we can create a new version and keep the old one for reference
+# If we need to change matching behavior later, we can create a new version and keep the old one for
+# reference
 RULE_VERSION = "tier1-v1"
 
 # Priority of strong matching rules (Left = Highest priotity, Right = Lowest priority)
-# Uses the highest priority rule that matches to make a decision, and ignores any lower priority rules that also match
+# Uses the highest priority rule that matches to make a decision, and ignores any lower priority
+# rules that also match
 RULE_PRIORITIES = ("domain", "linkedin", "external_id", "name_city")
 
-# Dictionnary assigning a weight to each matching rule, used to compute a score for each match candidate
+# Dictionnary assigning a weight to each matching rule, used to compute a score for each match
+# candidate
 RULE_WEIGHTS = {
     "domain": 1.0,
     "linkedin": 1.0,
@@ -41,7 +46,8 @@ Key = tuple[str, ...]
 Fields = tuple[tuple[str, str], ...]
 
 
-# Class for a match candidate, containing the two record version IDs and the matching rule that matched them
+# Class for a match candidate, containing the two record version IDs and the matching rule that
+# matched them
 @dataclass(frozen=True)
 class MatchCandidateData:
     left: UUID
@@ -54,15 +60,18 @@ class MatchCandidateData:
         """Return the pair of record version IDs in a consistent order."""
         return (self.left, self.right) if self.left < self.right else (self.right, self.left)
 
-    # Distinguish rules that are strong enough to be used for automatic resolution from those that are not
+    # Distinguish rules that are strong enough to be used for automatic resolution from those that
+    # are not
     # If other weak rules are added in the future, this property can be updated to reflect that
     @property
     def strong(self) -> bool:
         return self.rule != "name_only"
 
 
-# Class for the result of a match resolution, containing the number of organizations, links, and candidates created
-# Rerunning the matching on unchanged data should not create new organizations, links, or candidates, so these counts should be zero if the matching is idempotent
+# Class for the result of a match resolution, containing the number of organizations, links, and
+# candidates created
+# Rerunning the matching on unchanged data should not create new organizations, links, or
+# candidates, so these counts should be zero if the matching is idempotent
 @dataclass
 class MatchResult:
     # Counts new organizations.
@@ -73,7 +82,8 @@ class MatchResult:
     candidates_created: int = 0
 
 
-# Function to load the generic domains from the config file, used to filter out matches on generic domains
+# Function to load the generic domains from the config file, used to filter out matches on generic
+# domains
 @cache
 def load_generic_domains() -> frozenset[str]:
     with GENERIC_DOMAINS_PATH.open("rb") as handle:
@@ -81,7 +91,9 @@ def load_generic_domains() -> frozenset[str]:
     if (
         not isinstance(values, list)
         or not values
-        # An entry is invalid if it is not a string or if it is an empty string or whitespace only string. This is to avoid matching on generic domains like "example.com" or "test.com" which are not useful for matching.
+        # An entry is invalid if it is not a string or if it is an empty string or whitespace only
+        # string. This is to avoid matching on generic domains like "example.com" or "test.com"
+        # which are not useful for matching.
         or any(not isinstance(value, str) or not value.strip() for value in values)
     ):
         raise ValueError("generic_domains.toml needs a non-empty domains list")
@@ -89,14 +101,17 @@ def load_generic_domains() -> frozenset[str]:
     return frozenset(value.strip().lower() for value in values)
 
 
-# Function to extract external keys from a source record, used to identify matches based on external identifiers
+# Function to extract external keys from a source record, used to identify matches based on external
+# identifiers
 def external_keys(record: SourceRecord) -> set[tuple[str, str]]:
     result = set()
     for namespace, values in (record.external_ids or {}).items():
-        # Skip invalid namespaces or values. This is to avoid matching on invalid external identifiers which are not useful for matching.
+        # Skip invalid namespaces or values. This is to avoid matching on invalid external
+        # identifiers which are not useful for matching.
         if not isinstance(namespace, str) or not namespace.strip():
             continue
-        # Skip invalid values. This is to avoid matching on invalid external identifiers which are not useful for matching.
+        # Skip invalid values. This is to avoid matching on invalid external identifiers which are
+        # not useful for matching.
         if not isinstance(values, list):
             continue
         for value in values:
@@ -112,7 +127,8 @@ def blocking_keys(
     record: SourceRecord,
     excluded_domains: frozenset[str],
 ) -> Iterable[Key]:
-    # A domain is a strong identifier for an organization, but generic domains are not useful for matching.
+    # A domain is a strong identifier for an organization, but generic domains are not useful for
+    # matching.
     if record.domain and record.domain not in excluded_domains:
         yield "domain", record.domain
     # A person's LinkedIn profile cannot identify an organization.
@@ -124,7 +140,8 @@ def blocking_keys(
         yield "name", record.name_normalized
 
 
-# Function to classify a pair of source records, used to identify matches based on the matching rules
+# Function to classify a pair of source records, used to identify matches based on the matching
+# rules
 def classify_pair(
     left: SourceRecord,
     right: SourceRecord,
@@ -133,7 +150,8 @@ def classify_pair(
     # Return the first matching rule, or weaker same-name evidence.
     # Reject pairs that are not comparable, or that have already been invalidated.
     if (
-        # Reject pairs that are the same record, or that belong to different tenants, or that are not organizations, or that have been invalidated.
+        # Reject pairs that are the same record, or that belong to different tenants, or that are
+        # not organizations, or that have been invalidated.
         left.id == right.id
         or left.tenant_id != right.tenant_id
         or left.kind != "organization"
@@ -212,7 +230,8 @@ def blocked_matches(
     )
 
 
-# Function to generate evidence for a match candidate, used to provide context for the matching decision
+# Function to generate evidence for a match candidate, used to provide context for the matching
+# decision
 def evidence(match: MatchCandidateData, matched_record_id: UUID) -> list[RuleEvidence]:
     return [
         {
@@ -227,7 +246,8 @@ def evidence(match: MatchCandidateData, matched_record_id: UUID) -> list[RuleEvi
     ]
 
 
-# Function to check for conflicting identifiers in a group of records, used to prevent merging records with contradictory information
+# Function to check for conflicting identifiers in a group of records, used to prevent merging
+# records with contradictory information
 def conflicting_identifiers(records: Iterable[SourceRecord]) -> bool:
     linkedin = set()
     external = defaultdict(list)
@@ -249,7 +269,8 @@ def conflicting_identifiers(records: Iterable[SourceRecord]) -> bool:
     return any(not set.intersection(*values) for values in external.values() if len(values) > 1)
 
 
-# Function to find connected components in a graph of matches, used to group records that are strongly connected by matching rules
+# Function to find connected components in a graph of matches, used to group records that are
+# strongly connected by matching rules
 # AI Assisted
 def components(matches: Iterable[MatchCandidateData]) -> list[set[UUID]]:
     graph = defaultdict(set)
@@ -274,11 +295,15 @@ def components(matches: Iterable[MatchCandidateData]) -> list[set[UUID]]:
     return groups
 
 
-# Function to match organizations for a given tenant, used to create organizations and links based on the matching rules
-# Overall goal: 1->Load a tenant's current organization records and exisitng decisions, 2->Find matches and connected groups, 3->Check each group for conflicts, 4->Create organizations, links or review candidates as appropriate, 5->Return a summary of the results
+# Function to match organizations for a given tenant, used to create organizations and links based
+# on the matching rules
+# Overall goal: 1->Load a tenant's current organization records and exisitng decisions, 2->Find
+# matches and connected groups, 3->Check each group for conflicts, 4->Create organizations, links or
+# review candidates as appropriate, 5->Return a summary of the results
 # AI Assisted with debugging and optimization
 def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
-    # Load the tenant's current organization records and existing decisions, and lock the tenant row to prevent concurrent matching for the same tenant.
+    # Load the tenant's current organization records and existing decisions, and lock the tenant row
+    # to prevent concurrent matching for the same tenant.
     with bound_to_tenant(session, tenant_id):
         # Serialize matcher invocations for this tenant.
         tenant = session.scalar(select(Tenant).where(Tenant.id == tenant_id).with_for_update())
