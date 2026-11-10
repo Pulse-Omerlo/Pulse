@@ -52,6 +52,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Recorded incremental sync runs | #55 | #126 |
 | Sync runs page | #67 | #127 |
 | CSV and JSON file import | #24 | |
+| Industry classification of organizations | #149 | |
 
 ## Details
 
@@ -168,3 +169,24 @@ sample files in `synthetic/samples/` by hand.
 **Problem found:** the first command tests read the JSON log lines on stdout
 as the command's output. They now filter them out, as the sync command tests
 do.
+
+### Industry classification of organizations (#149)
+
+Claude Code wrote the NAICS sector list, the keyword rules, the classifier,
+the `industry_classification` table and its migration, and the step that
+classifies a tenant's organizations after each successful sync. It also wrote
+the demo tenants' category mappings from the synthetic fixtures.
+
+**Verification:** unit tests cover each rule (categories before keywords,
+weighted keywords, whole-word matching, ties, unclassified reasons, unmapped
+categories, mapping files). The integration tests check storage, skipping
+records already classified, reclassifying a new version or a changed mapping,
+tenant isolation, and that a real sync classifies every current organization.
+
+**Problems found:**
+- The first keyword list had "union", which would have put credit unions under
+  other services instead of finance. Words common to several sectors are left
+  out, and the file says why.
+- An integration test closed a version with an end date before its start,
+  which the `valid_range` check rejects. It now sets the start date explicitly.
+
