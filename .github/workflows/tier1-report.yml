@@ -1,0 +1,39 @@
+name: Tier 1 accuracy report
+
+# Dev only: scores Tier 1 matching against the synthetic ground truth.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - backend/app/processing/entity_resolution.py
+      - backend/app/processing/generic_domains.toml
+      - backend/app/processing/normalization.py
+      - backend/app/processing/tier1_accuracy.py
+      - backend/app/tier1_report.py
+      - backend/synthetic/**
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: Tier 1 accuracy report
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv sync --locked
+      - name: Print the report
+        run: uv run python -m app.tier1_report | tee report.txt
+      # Shows the report on the run summary, linked from the PR checks.
+      - name: Report summary
+        run: |
+          printf '### Tier 1 accuracy report\n\n```\n' >> "$GITHUB_STEP_SUMMARY"
+          cat report.txt >> "$GITHUB_STEP_SUMMARY"
+          printf '```\n' >> "$GITHUB_STEP_SUMMARY"
