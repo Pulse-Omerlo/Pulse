@@ -1,14 +1,17 @@
-# AI declaration: Below 50% AI-generated
+# AI contribution: Below 50% AI-generated
 
 from uuid import UUID
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
 from app.core.tenancy import bound_to_tenant
 from app.models import OrgLink, SourceRecord
 
 
 # This service retrieves the current records belonging to an organization.
-# It joins records through their organization links, checks the tenant on both tables, and excludes historical versions so each logical record’s current membership is shown
+# It joins records through their organization links, checks the tenant on both tables, and excludes
+# historical versions so each logical record's current membership is shown
 def current_records(
     session: Session,
     tenant_id: UUID,

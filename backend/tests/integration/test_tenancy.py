@@ -15,6 +15,7 @@ from app.core.tenancy import (
     tenant_owned,
 )
 from app.models import (
+    IndustryClassification,
     MatchCandidate,
     Organization,
     OrgLink,
@@ -90,6 +91,13 @@ def add_graph(session, name: str) -> Graph:
         MatchCandidate: MatchCandidate(
             tenant_id=tid, left_record_id=left, right_record_id=right, score=0.7
         ),
+        IndustryClassification: IndustryClassification(
+            tenant_id=tid,
+            source_record_id=first.id,
+            status="classified",
+            primary_sector="72",
+            rules_version="test",
+        ),
     }
     session.add_all(rows.values())
     session.flush()
@@ -125,6 +133,7 @@ def test_the_graph_has_a_row_in_every_tenant_owned_table():
         RecordChange,
         OrgLink,
         MatchCandidate,
+        IndustryClassification,
     }
 
 
