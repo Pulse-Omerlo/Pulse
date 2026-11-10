@@ -189,4 +189,3 @@ tenant isolation, and that a real sync classifies every current organization.
   out, and the file says why.
 - An integration test closed a version with an end date before its start,
   which the `valid_range` check rejects. It now sets the start date explicitly.
-
