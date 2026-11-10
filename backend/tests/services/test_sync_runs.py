@@ -12,6 +12,7 @@ from app.ingestion.files.connector import FileConnector
 from app.ingestion.mapped import MappedRecord, MappingResult
 from app.models import Source
 from app.services import sync_runs
+from app.services.industry import ClassificationReport
 from app.services.source_records import UpsertResult
 from app.services.sync_runs import (
     Fetched,
@@ -156,6 +157,14 @@ def session(mocker):
     return mocker.MagicMock(info={})
 
 
+@pytest.fixture(autouse=True)
+def classified(mocker):
+    """The industry classification run after a successful sync, mocked."""
+    return mocker.patch.object(
+        sync_runs, "classify_organizations", return_value=ClassificationReport()
+    )
+
+
 @pytest.fixture
 def stored(mocker):
     """The archive and the versioned upsert, mocked."""
@@ -206,7 +215,8 @@ def test_a_successful_run_records_its_counts_and_advances_the_watermarks(session
     }
     assert target.workspace_watermarks == {"ws-1": {"organization": T1.isoformat()}}
     assert detected == [(session, run)]
-    assert session.commit.call_count == 3
+    # Start, archive, store, then the classification.
+    assert session.commit.call_count == 4
 
 
 def test_an_incremental_run_never_marks_records_removed(session, stored):
@@ -383,3 +393,40 @@ def test_required_cleaning_failure_does_not_abort_sync_or_remove_stored_record(s
     assert [r.external_id for r in upsert.call_args.args[2]] == ["valid-org"]
     assert close.call_args.kwargs["keep"] == {"NA"}
     session.rollback.assert_not_called()
+
+
+def test_a_successful_run_classifies_the_tenant_organizations(session, stored, classified):
+    # Arrange
+    target = source()
+
+    # Act
+    run = run_sync(session, target, org_reader(), archive=None, now=clock())
+
+    # Assert
+    assert run.status == "succeeded"
+    classified.assert_called_once_with(session, target.tenant_id)
+
+
+def test_a_failed_run_classifies_nothing(session, stored, classified):
+    # Arrange
+    _, upsert, _ = stored
+    upsert.side_effect = RuntimeError("database went away")
+
+    # Act
+    run = run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    # Assert
+    assert run.status == "failed"
+    classified.assert_not_called()
+
+
+def test_a_failed_classification_leaves_the_run_succeeded(session, stored, classified):
+    # Arrange
+    classified.side_effect = ValueError("invalid sectors for category 'abc'")
+
+    # Act
+    run = run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    # Assert
+    assert run.status == "succeeded"
+    session.rollback.assert_called_once()

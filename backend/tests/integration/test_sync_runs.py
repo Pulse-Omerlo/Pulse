@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 from app import sync as sync_command
 from app.ingestion.connector import parse_timestamp
 from app.ingestion.omerlo.connector import OmerloConnector
+from app.models import IndustryClassification, RecordChange, Source, SourceRecord, SyncRun, Tenant
 from app.models import RawRecord as RawRecordRow
-from app.models import RecordChange, Source, SourceRecord, SyncRun, Tenant
 from app.seed import seed
 from app.services.sync_runs import OmerloReader, run_sync
 from app.storage.local import LocalArchive
@@ -384,3 +384,19 @@ def test_sync_command_rejects_an_unknown_tenant(migrated_database, capsys):
     # Assert
     assert exit_info.value.code == 2
     assert "No tenant 'nobody'" in capsys.readouterr().err
+
+
+def test_a_sync_classifies_every_current_organization(session, sync):
+    # Act
+    run = sync(full=True)
+
+    # Assert
+    organizations = session.scalars(
+        select(SourceRecord.id).where(
+            SourceRecord.kind == "organization", SourceRecord.valid_to.is_(None)
+        )
+    ).all()
+    classified = session.scalars(select(IndustryClassification.source_record_id)).all()
+    assert run.status == "succeeded"
+    assert organizations
+    assert set(classified) == set(organizations)

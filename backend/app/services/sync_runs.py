@@ -1,6 +1,8 @@
 # AI contribution: 50% or more AI-generated
 """Run one sync of a source: fetch, archive, map and store versions, recorded as a sync_run."""
 
+import logging
+import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -17,10 +19,13 @@ from app.ingestion.mapped import MappingResult
 from app.ingestion.omerlo.connector import OmerloConnector
 from app.ingestion.omerlo.mapping.batch import map_records
 from app.models import Source, SyncRun
+from app.services.industry import ClassificationReport, classify_organizations
 from app.services.record_changes import record_changes
 from app.services.source_records import close_unseen, upsert_records
 from app.storage.archive import PayloadArchive
 from app.storage.raw_records import archive_records
+
+logger = logging.getLogger(__name__)
 
 COUNT_KEYS = ("fetched", "new", "changed", "unchanged", "removed", "failed")
 MAX_ERROR_LENGTH = 2000
@@ -33,6 +38,8 @@ WorkspaceWatermarks = dict[str, dict[str, datetime]]
 
 # Writes the run's record_change rows in the run's transaction, returning counts per type.
 ChangeDetector = Callable[[Session, SyncRun], dict[str, int]]
+# Classifies the tenant's organizations in the caller's transaction after a successful run.
+Classifier = Callable[[Session, uuid.UUID], ClassificationReport]
 
 
 @dataclass
@@ -94,6 +101,7 @@ def run_sync(
     *,
     full: bool = False,
     detect_changes: ChangeDetector = record_changes,
+    classify: Classifier | None = None,
     now: Callable[[], datetime] = utc_now,
 ) -> SyncRun:
     """Run one sync of `source` and return its sync_run, committed whatever the outcome.
@@ -135,9 +143,30 @@ def run_sync(
             failed_counts = {**dict.fromkeys(COUNT_KEYS, 0), "fetched": counts["fetched"]}
             finish(run, "failed", failed_counts, now(), error=describe(error))
             session.commit()
+        if run.status == "succeeded":
+            classify_after_sync(session, run, classify or classify_organizations)
         # Loaded while still bound, so callers can read the run after the scope ends.
         session.refresh(run)
         return run
+
+
+def classify_after_sync(session: Session, run: SyncRun, classify: Classifier) -> None:
+    """Classify the tenant's organizations; a failure is logged and leaves the run as it is."""
+    try:
+        report = classify(session, run.tenant_id)
+        session.commit()
+    except Exception:
+        session.rollback()
+        logger.exception("industry classification failed", extra={"sync_run_id": str(run.id)})
+        return
+    logger.info(
+        "organizations classified",
+        extra={
+            "sync_run_id": str(run.id),
+            "classified": report.classified,
+            "unclassified": report.unclassified,
+        },
+    )
 
 
 def fetch(connector: OmerloConnector, source: Source, *, full: bool) -> Fetched:
