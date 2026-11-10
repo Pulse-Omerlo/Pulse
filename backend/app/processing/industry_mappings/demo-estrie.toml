@@ -1,0 +1,50 @@
+# Categories of the synthetic demo-estrie network (default fixture seed) mapped to NAICS sectors.
+# A category listed with no sectors is known and left out on purpose.
+
+[categories."0eb27eb3-a230-4fe7-aaf9-e39cb30b556e"]
+name = "Actualités / News"
+sectors = []
+
+[categories."5bfef944-eade-4811-a2ac-8cf9d083baf6"]
+name = "Affaires / Business"
+sectors = []
+
+[categories."60a820ff-7c52-4439-aad2-8c40496b7c3b"]
+name = "Culture / Culture"
+sectors = ["71"]
+
+[categories."939467ef-5068-4c3c-b938-ea6f367cc56f"]
+name = "Sports / Sports"
+sectors = ["71"]
+
+[categories."926e5cd7-04ce-4ccf-85d1-9ae731cef696"]
+name = "Société / Society"
+sectors = []
+
+[categories."d6cd1959-41d7-4e9f-94b9-0f0af4e29602"]
+name = "Santé / Health"
+sectors = ["62"]
+
+[categories."ef7522ab-baa9-4c3d-963e-5427deda4f1d"]
+name = "Éducation / Education"
+sectors = ["61"]
+
+[categories."5286e793-248a-45cf-815d-9d871c685bba"]
+name = "Environnement / Environment"
+sectors = []
+
+[categories."9e8effef-a3fb-406f-99e0-1ccccf5b0962"]
+name = "Gastronomie / Food"
+sectors = ["72"]
+
+[categories."d341380f-e6cd-44f0-acf1-3ef6f5bd1e20"]
+name = "Tourisme / Tourism"
+sectors = ["72", "71"]
+
+[categories."d671ad5b-ec22-4815-84cc-f213bb8de79c"]
+name = "Technologie / Technology"
+sectors = ["54", "51"]
+
+[categories."a4372014-b69d-453f-99b2-f27b7e4822bc"]
+name = "Communauté / Community"
+sectors = ["81"]
