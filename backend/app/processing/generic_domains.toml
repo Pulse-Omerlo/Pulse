@@ -1,0 +1,18 @@
+# No substantial AI-generated code
+# Declare the domains that can't identify organizations reliably
+# FYI ignoring a domain will not exclude the record fro matching, it's just to not relate by standard domains
+domains = [
+    "gmail.com",
+    "googlemail.com",
+    "hotmail.com",
+    "outlook.com",
+    "live.com",
+    "yahoo.com",
+    "icloud.com",
+    "facebook.com",
+    "instagram.com",
+    "linkedin.com",
+    "twitter.com",
+    "x.com",
+    "youtube.com",
+]
