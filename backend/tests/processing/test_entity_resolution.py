@@ -1,6 +1,7 @@
 # AI contribution: 50% or more AI-generated
 """Tier 1 edge cases. Database calls are mocked; these are not integration tests."""
 
+import json
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -304,7 +305,7 @@ def test_query_cannot_switch_an_already_bound_tenant(session):
     session.scalars.assert_not_called()
 
 
-def test_command_commits_and_prints_summary(mocker, session, capsys):
+def test_command_commits_and_logs_summary(mocker, session, capsys):
     # Arrange
     session.__enter__.return_value = session
     mocker.patch.object(command, "get_session_factory", return_value=lambda: session)
@@ -317,7 +318,13 @@ def test_command_commits_and_prints_summary(mocker, session, capsys):
     # Assert
     matcher.assert_called_once_with(session, TENANT)
     session.commit.assert_called_once()
-    assert "Created 1 organizations, 2 links, 3 candidates." in capsys.readouterr().out
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["event"] == "organization_matching_completed"
+    assert summary["module"] == "app.match"
+    assert summary["tenant_id"] == str(TENANT)
+    assert summary["organizations_created"] == 1
+    assert summary["links_created"] == 2
+    assert summary["candidates_created"] == 3
 
 
 def test_command_unknown_tenant_does_not_commit(mocker, session, capsys):

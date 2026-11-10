@@ -5,10 +5,12 @@ import argparse
 from collections.abc import Sequence
 
 from app.core.database import get_session_factory
-from app.core.logging import configure_logging
+from app.core.logging import configure_logging, get_logger
 from app.core.tenancy import bound_to_tenant, system_access
 from app.processing.entity_resolution import match_organizations
 from app.sync import SyncCommandError, find_tenant
+
+logger = get_logger(__name__)
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -34,10 +36,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         except SyncCommandError as error:
             parser.exit(2, f"error: {error}\n")
 
-    print(  # noqa: T201
-        f"Created {result.organizations_created} organizations, "
-        f"{result.links_created} links, "
-        f"{result.candidates_created} candidates."
+    logger.info(
+        "organization_matching_completed",
+        tenant_id=str(tenant_id),
+        organizations_created=result.organizations_created,
+        links_created=result.links_created,
+        candidates_created=result.candidates_created,
     )
 
 
