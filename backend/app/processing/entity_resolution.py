@@ -26,12 +26,8 @@ from app.processing.clustering import (
     plan_clusters,
 )
 from app.processing.fuzzy_matching import FuzzyResult, fuzzy_matches
-
-# Rule names stay importable from here for existing callers.
-from app.processing.match_rules import RULE_PRIORITIES as RULE_PRIORITIES
-from app.processing.match_rules import RULE_VERSION as RULE_VERSION
-from app.processing.match_rules import RULE_WEIGHTS as RULE_WEIGHTS
 from app.processing.match_rules import (
+    FUZZY_RULES,
     MatchCandidateData,
     Pair,
     candidate_score,
@@ -40,6 +36,11 @@ from app.processing.match_rules import (
     rule_set_version,
     strength_key,
 )
+
+# Rule names stay importable from here for existing callers.
+from app.processing.match_rules import RULE_PRIORITIES as RULE_PRIORITIES
+from app.processing.match_rules import RULE_VERSION as RULE_VERSION
+from app.processing.match_rules import RULE_WEIGHTS as RULE_WEIGHTS
 
 logger = get_logger(__name__)
 
@@ -189,13 +190,16 @@ def blocked_matches(
 
 # Function to generate evidence for a match candidate, used to provide context for the matching
 # decision
-def evidence(match: MatchCandidateData, matched_record_id: UUID) -> list[RuleEvidence]:
+def evidence(
+    match: MatchCandidateData, matched_record_id: UUID, tentative: bool = False
+) -> list[RuleEvidence]:
     # Sides are written from this record's point of view: its value first.
     this_is_left = matched_record_id == match.right
     values = [(field, value, value) for field, value in match.fields] + [
         (field, left, right) if this_is_left else (field, right, left)
         for field, left, right in match.sides
     ]
+    marker: dict[str, bool] = {"tentative": True} if tentative else {}
     return [
         {
             "rule": match.rule,
@@ -204,9 +208,17 @@ def evidence(match: MatchCandidateData, matched_record_id: UUID) -> list[RuleEvi
             "value": value,
             "matched_value": matched_value,
             "matched_record_id": str(matched_record_id),
+            **marker,
         }
         for field, value, matched_value in values
     ]
+
+
+def is_tentative(link: OrgLink) -> bool:
+    """Whether a stored link rests on a fuzzy match; versioning copies the evidence."""
+    if link.method in FUZZY_RULES:
+        return True
+    return any(isinstance(entry, dict) and entry.get("tentative") for entry in link.evidence or [])
 
 
 def log_tier2(tenant_id: UUID, result: FuzzyResult) -> None:
@@ -303,6 +315,7 @@ def _link_facts(run: _Run) -> dict[UUID, LinkFacts]:
             target or link.organization_id,
             manual=link.method == "manual",
             stored_organization_id=link.organization_id if target else None,
+            tentative=is_tentative(link),
         )
     return facts
 
@@ -350,7 +363,7 @@ def _merge(run: _Run, merged_id: UUID, survivor_id: UUID) -> None:
     run.result.organizations_merged += 1
 
 
-def _add_link(run: _Run, new_link: NewLink, organization_id: UUID) -> None:
+def _add_link(run: _Run, new_link: NewLink, organization_id: UUID, tentative: bool) -> None:
     match = new_link.edge
     link = OrgLink(
         tenant_id=run.tenant_id,
@@ -359,7 +372,7 @@ def _add_link(run: _Run, new_link: NewLink, organization_id: UUID) -> None:
         method=match.rule,
         confidence=link_confidence(match),
         decided_by=decided_by(match),
-        evidence=evidence(match, new_link.neighbor),
+        evidence=evidence(match, new_link.neighbor, tentative),
     )
     run.session.add(link)
     run.links[new_link.record_id] = link
@@ -377,7 +390,7 @@ def _apply(run: _Run, cluster: Cluster) -> None:
     for record_id in cluster.repointed:
         run.links[record_id].organization_id = organization.id
     for new_link in cluster.new_links:
-        _add_link(run, new_link, organization.id)
+        _add_link(run, new_link, organization.id, new_link.record_id in cluster.tentative)
     # A value is only written when it changes, and never replaced by nothing.
     if cluster.display_name and cluster.display_name != organization.display_name:
         organization.display_name = cluster.display_name

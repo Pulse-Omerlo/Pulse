@@ -4,7 +4,10 @@
 import json
 from uuid import UUID
 
+import pytest
+
 from app.core.logging import configure_logging
+from app.models import OrgLink
 from app.processing import entity_resolution as er
 from app.processing.fuzzy_blocking import BlockingStats
 from app.processing.fuzzy_matching import FuzzyResult
@@ -68,3 +71,29 @@ def test_tier2_work_and_what_it_left_out_are_logged(capsys):
     assert event["event"] == "tier2_matching"
     assert (event["matches"], event["comparisons"]) == (1, 12)
     assert (event["split_blocks"], event["windowed_blocks"], event["pairs_left_out"]) == (2, 1, 40)
+
+
+def test_a_link_placed_through_a_fuzzy_match_carries_a_marker():
+    # Act
+    marked = er.evidence(fuzzy(), RIGHT, tentative=True)
+    plain = er.evidence(fuzzy(), RIGHT)
+    # Assert
+    assert all(entry["tentative"] is True for entry in marked)
+    assert all("tentative" not in entry for entry in plain)
+
+
+@pytest.mark.parametrize(
+    "method,evidence,tentative",
+    [
+        ("fuzzy", [], True),
+        ("domain", [{"field": "domain", "tentative": True}], True),
+        ("domain", [{"field": "domain"}], False),
+        ("manual", [{"decided_by": "reviewer"}], False),
+        ("domain", None, False),
+    ],
+)
+def test_stored_links_are_tentative_by_method_or_marker(method, evidence, tentative):
+    # Arrange
+    link = OrgLink(method=method, evidence=evidence)
+    # Act / Assert
+    assert er.is_tentative(link) is tentative

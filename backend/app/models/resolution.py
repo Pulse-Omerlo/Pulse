@@ -22,6 +22,8 @@ class RuleEvidence(TypedDict):
     value: str
     matched_value: str
     matched_record_id: str
+    # The link rests on a fuzzy match, directly or through another tentative link.
+    tentative: NotRequired[bool]
 
 
 class ManualEvidence(TypedDict):
