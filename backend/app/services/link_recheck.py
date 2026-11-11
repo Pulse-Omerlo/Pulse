@@ -161,9 +161,7 @@ def _changed_new_ids(
     for old_id, new_id in carried:
         before = versions.get(old_id)
         after = versions.get(new_id)
-        if before is None or after is None:
-            continue
-        if after.kind != "organization":
+        if before is None or after is None or after.kind != "organization":
             continue
         if matching_changes(before, after):
             changed.add(new_id)
