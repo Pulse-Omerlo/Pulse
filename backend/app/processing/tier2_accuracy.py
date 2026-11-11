@@ -1,125 +1,92 @@
 # AI contribution: 50% or more AI-generated
 """Group records with Tier 1 and Tier 2, as the matcher does, for the dev-only report."""
 
-import random
-import string
-from collections.abc import Sequence
-from dataclasses import dataclass, field
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from uuid import UUID
 
 from app.models import SourceRecord
 from app.processing.clustering import member_from_record, plan_clusters
 from app.processing.entity_resolution import blocked_matches, load_generic_domains
 from app.processing.fuzzy_config import FuzzyConfig
 from app.processing.fuzzy_matching import fuzzy_matches
+from app.processing.match_rules import FUZZY_RULES, MatchCandidateData
 
-# Name tokens at least this long get the typo, so short words stay readable.
-TYPO_MIN_TOKEN_LENGTH = 5
+# The record columns the report reads, for building and copying unsaved records.
+RECORD_FIELDS = (
+    "external_id",
+    "external_ids",
+    "attributes",
+    "name_normalized",
+    "domain",
+    "linkedin",
+    "city",
+)
 
 
 @dataclass(frozen=True)
 class Grouping:
-    """External ids grouped into organizations, and what happened to the Tier 2 pairs."""
+    """External ids grouped into organizations, and what the Tier 2 edges did."""
 
-    groups: list[set[str]] = field(default_factory=list)
+    groups: tuple[frozenset[str], ...] = ()
+    # Records the plan links through a Tier 2 edge.
     tier2_linked: int = 0
+    # Tier 2 pairs set aside for review.
     tier2_review: int = 0
     # Pairs that the bounded blocking did not compare.
     pairs_left_out: int = 0
 
 
-def tier2_grouping(records: Sequence[SourceRecord], config: FuzzyConfig) -> Grouping:
-    """Plan Tier 1 and Tier 2 edges together, as match_organizations does."""
+def organization_record(record_id: UUID, tenant_id: UUID, **fields: object) -> SourceRecord:
+    return SourceRecord(id=record_id, tenant_id=tenant_id, kind="organization", **fields)
+
+
+def copy_record(record: SourceRecord, **changes: object) -> SourceRecord:
+    fields = {name: getattr(record, name) for name in RECORD_FIELDS}
+    return organization_record(record.id, record.tenant_id, **(fields | changes))
+
+
+def _together(cluster_of: Mapping[UUID, int], edge: MatchCandidateData) -> bool:
+    return edge.left in cluster_of and cluster_of[edge.left] == cluster_of.get(edge.right)
+
+
+def grouping(
+    records: Sequence[SourceRecord], edges: Sequence[MatchCandidateData], pairs_left_out: int = 0
+) -> Grouping:
+    """Plan the edges as match_organizations does, on records that have no links yet."""
     by_id = {record.id: record for record in records}
     excluded = load_generic_domains()
     members = {record.id: member_from_record(record, excluded) for record in records}
-    tier1 = blocked_matches(records, excluded)
-    result = fuzzy_matches(records, excluded, {edge.providePair for edge in tier1}, config)
-    tier2 = list(result.matches)
-    plan = plan_clusters(members, tier1 + tier2, {})
-    cut = {edge.providePair for edge in plan.candidates}
-    owner = {record_id: index for index, c in enumerate(plan.clusters) for record_id in c.members}
-    linked = sum(edge.strong and edge.providePair not in cut for edge in tier2)
-    review = sum(
-        edge.providePair in cut
-        or (not edge.strong and owner.get(edge.left, -1) != owner.get(edge.right, -2))
-        for edge in tier2
-    )
-    return Grouping(
-        groups=[{by_id[key].external_id for key in cluster.members} for cluster in plan.clusters],
-        tier2_linked=linked,
-        tier2_review=review,
-        pairs_left_out=result.blocking.pairs_left_out,
-    )
-
-
-def _typo(name: str, rng: random.Random) -> str:
-    """One deleted, swapped, replaced or added letter in a long word of the name."""
-    tokens = name.split()
-    long_tokens = [i for i, token in enumerate(tokens) if len(token) >= TYPO_MIN_TOKEN_LENGTH]
-    longest = max(range(len(tokens)), key=lambda i: len(tokens[i]))
-    index = rng.choice(long_tokens) if long_tokens else longest
-    token = tokens[index]
-    at = rng.randrange(1, len(token)) if len(token) > 1 else 0
-    letter = rng.choice([c for c in string.ascii_lowercase if c != token[at]])
-    edits = {
-        "delete": token[:at] + token[at + 1 :],
-        "swap": token[: at - 1] + token[at] + token[at - 1] + token[at + 1 :] if at else token,
-        "replace": token[:at] + letter + token[at + 1 :],
-        "insert": token[:at] + letter + token[at:],
+    plan = plan_clusters(members, edges, {})
+    cluster_of = {
+        key: index for index, cluster in enumerate(plan.clusters) for key in cluster.members
     }
-    edited = edits[rng.choice(sorted(edits))]
-    # Swapping two equal letters changes nothing.
-    tokens[index] = edited if edited != token else edits["replace"]
-    return " ".join(tokens)
+    cut = {edge.providePair for edge in plan.candidates}
+    tier2 = [edge for edge in edges if edge.rule in FUZZY_RULES]
+    return Grouping(
+        groups=tuple(
+            frozenset(by_id[key].external_id for key in cluster.members)
+            for cluster in plan.clusters
+        ),
+        tier2_linked=sum(
+            link.edge.rule in FUZZY_RULES for cluster in plan.clusters for link in cluster.new_links
+        ),
+        tier2_review=sum(
+            edge.providePair in cut or (not edge.strong and not _together(cluster_of, edge))
+            for edge in tier2
+        ),
+        pairs_left_out=pairs_left_out,
+    )
 
 
-def _name_variant(name: str, generic: frozenset[str], rng: random.Random) -> str:
-    """A typo, the first word moved to the end, or a generic word left out."""
-    tokens = name.split()
-    droppable = [i for i, token in enumerate(tokens) if token in generic]
-    change = rng.choice(("typo", "typo", "reorder", "drop_generic"))
-    if change == "reorder" and len(tokens) > 1:
-        return " ".join([*tokens[1:], tokens[0]])
-    if change == "drop_generic" and droppable and len(tokens) > 1:
-        dropped = rng.choice(droppable)
-        return " ".join(token for i, token in enumerate(tokens) if i != dropped)
-    return _typo(name, rng)
-
-
-def hard_variant(
-    records: Sequence[SourceRecord], ground_truth: dict, seed: int, generic: frozenset[str]
-) -> list[SourceRecord]:
-    """Copies where each duplicate shares no identifier and its name is spelled differently.
-
-    Tier 1 cannot find these duplicates, so the variant measures what Tier 2 adds.
-    """
-    second = {duplicate["record_ids"][1] for duplicate in ground_truth["organization_duplicates"]}
-    result = []
-    for record in records:
-        copy = _copy(record)
-        if record.external_id in second and record.name_normalized:
-            rng = random.Random(f"{seed}:{record.external_id}")
-            attributes = dict(record.attributes or {})
-            identifiers = dict(attributes.get("identifiers") or {})
-            identifiers.update(emails=[], domains=[], linkedin=[])
-            copy.attributes = {**attributes, "identifiers": identifiers}
-            copy.name_normalized = _name_variant(record.name_normalized, generic, rng)
-            copy.domain = copy.linkedin = None
-            copy.external_ids = {}
-        result.append(copy)
-    return result
-
-
-def _copy(record: SourceRecord) -> SourceRecord:
-    return SourceRecord(
-        id=record.id,
-        tenant_id=record.tenant_id,
-        kind=record.kind,
-        external_id=record.external_id,
-        external_ids=record.external_ids,
-        attributes=record.attributes,
-        name_normalized=record.name_normalized,
-        domain=record.domain,
-        linkedin=record.linkedin,
-        city=record.city,
+def tier_groupings(
+    records: Sequence[SourceRecord], config: FuzzyConfig
+) -> tuple[Grouping, Grouping]:
+    """Tier 1 alone, then Tier 1 plus Tier 2."""
+    excluded = load_generic_domains()
+    tier1 = blocked_matches(records, excluded)
+    tier2 = fuzzy_matches(records, excluded, {edge.providePair for edge in tier1}, config)
+    return (
+        grouping(records, tier1),
+        grouping(records, [*tier1, *tier2.matches], tier2.blocking.pairs_left_out),
     )

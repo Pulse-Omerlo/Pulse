@@ -8,12 +8,16 @@ from uuid import UUID
 from app.core.logging import configure_logging, get_logger
 from app.ingestion.mapped import clean_mapped
 from app.ingestion.omerlo.mapping.mappers import map_record
-from app.models import SourceRecord
-from app.processing.clustering import member_from_record, plan_clusters
 from app.processing.entity_resolution import blocked_matches, load_generic_domains
 from app.processing.fuzzy_config import load_fuzzy_config
 from app.processing.tier1_accuracy import combine, expected_pairs, predicted_pairs, score
-from app.processing.tier2_accuracy import hard_variant, tier2_grouping
+from app.processing.tier2_accuracy import (
+    RECORD_FIELDS,
+    grouping,
+    organization_record,
+    tier_groupings,
+)
+from app.processing.tier2_hard_variant import hard_variant
 from synthetic.omerlo_fixtures import DEFAULT_SEED, OmerloFixtureGenerator
 
 HEADER = "DEV ONLY: synthetic data, not the official evaluation."
@@ -31,45 +35,31 @@ def build_records(tenant_number, tenant_data):
         mapped.append(map_record("organization", payload, metadata=metadata))
     cleaned = clean_mapped(mapped)
 
-    records = []
-    for number, record in enumerate(cleaned.records, start=1):
-        records.append(
-            SourceRecord(
-                id=UUID(int=tenant_number * 100000 + number),
-                tenant_id=UUID(int=tenant_number),
-                kind="organization",
-                external_id=record.external_id,
-                external_ids=record.external_ids,
-                attributes=record.attributes,
-                name_normalized=record.name_normalized,
-                domain=record.domain,
-                linkedin=record.linkedin,
-                city=record.city,
-            )
+    return [
+        organization_record(
+            UUID(int=tenant_number * 100000 + number),
+            UUID(int=tenant_number),
+            **{name: getattr(record, name) for name in RECORD_FIELDS},
         )
-    return records
+        for number, record in enumerate(cleaned.records, start=1)
+    ]
 
 
 def tier1_groups(records):
     """Groups of external ids that Tier 1 would link to one organization."""
-    by_id = {record.id: record for record in records}
-    generic_domains = load_generic_domains()
-    members = {record.id: member_from_record(record, generic_domains) for record in records}
     # The same plan as the matcher, so conflicting links are cut here too.
-    plan = plan_clusters(members, blocked_matches(records, generic_domains), {})
-    return [{by_id[record_id].external_id for record_id in c.members} for c in plan.clusters]
+    found = grouping(records, blocked_matches(records, load_generic_domains()))
+    return [set(group) for group in found.groups]
 
 
 def score_tenant(records, expected, config):
     """Tier 1 alone, then Tier 1 plus Tier 2, against the same expected pairs."""
-    grouping = tier2_grouping(records, config)
-    tier1 = score(expected, predicted_pairs(tier1_groups(records)))
-    both = score(expected, predicted_pairs(grouping.groups))
-    return tier1, {
-        **both,
-        "linked": grouping.tier2_linked,
-        "review": grouping.tier2_review,
-        "pairs_left_out": grouping.pairs_left_out,
+    tier1, both = tier_groupings(records, config)
+    return score(expected, predicted_pairs(tier1.groups)), {
+        **score(expected, predicted_pairs(both.groups)),
+        "linked": both.tier2_linked,
+        "review": both.tier2_review,
+        "pairs_left_out": both.pairs_left_out,
     }
 
 
@@ -123,6 +113,7 @@ def report(datasets, config):
         tier1_scores.append(tier1)
         tier2_scores.append(both)
         log_score(slug, tier1)
+        log_wrong_pairs(slug, tier1)
         log_score(slug, both, "tier2_score")
         log_wrong_pairs(slug, both, "tier2")
     log_score("all", combine(tier1_scores))
@@ -143,7 +134,7 @@ def main(argv=None):
     parser.add_argument(
         "--hard",
         action="store_true",
-        help="remove the shared identifiers of each duplicate and respell its name",
+        help="respell each duplicate and drop its identifiers, and add near-miss negatives",
     )
     parser.add_argument("--sweep", action="store_true", help="score each Tier 2 threshold")
     args = parser.parse_args(argv)

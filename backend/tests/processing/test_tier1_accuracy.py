@@ -125,9 +125,13 @@ def test_hard_variant_shows_what_tier2_adds(capsys):
     totals = {e["event"]: e for e in events if e.get("tenant") == "all"}
     assert events[0]["variant"] == "hard"
     assert totals["tier1_score"]["recall"] == 0.0
-    assert totals["tier2_score"]["recall"] > 0.2
+    assert totals["tier2_score"]["recall"] > 0.5
+    # The near-miss negatives add no false positive.
     assert totals["tier2_score"]["precision"] == 1.0
-    assert totals["tier2_score"]["linked"] > 0
+    assert totals["tier2_score"]["linked"] > 0 and totals["tier2_score"]["review"] > 0
+    names = {e["event"] for e in events}
+    # Tier 1 misses every hard duplicate, and the report lists each of them.
+    assert {"tier1_false_negative", "tier2_false_negative"} <= names
 
 
 def test_sweep_scores_each_threshold(capsys):
