@@ -2,6 +2,7 @@
 """Sync run orchestration with the database mocked; tests/integration runs it for real."""
 
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -122,6 +123,22 @@ def test_fetch_tracks_the_newest_update_per_workspace_and_kind():
     assert fetched.workspace_newest == {"ws-1": {"organization": T2}, "ws-2": {"person": T3}}
 
 
+def test_fetch_keeps_records_reported_deleted_apart_but_counts_them_for_the_watermark():
+    # Arrange
+    gone = replace(raw("organization", "o2", T2), deleted=True)
+    connector = FakeConnector(
+        community={("organization", "ws-1"): [gone, raw("organization", "o1", T1)]}
+    )
+
+    # Act
+    fetched = fetch(connector, source(), full=False)
+
+    # Assert
+    assert [r.external_id for r in fetched.records] == ["o1"]
+    assert fetched.deleted == [gone]
+    assert fetched.workspace_newest == {"ws-1": {"organization": T2}}
+
+
 def test_read_watermarks_skips_values_that_are_not_timestamps():
     # Act
     parsed = read_watermarks(
@@ -229,6 +246,29 @@ def test_an_incremental_run_never_marks_records_removed(session, stored):
     # Assert
     assert (run.mode, run.counts["removed"]) == ("incremental", 0)
     close.assert_not_called()
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_records_reported_deleted_are_removed_in_any_run(session, stored, mocker, full):
+    # Arrange
+    archive, upsert, _ = stored
+    close_deleted = mocker.patch.object(sync_runs, "close_deleted", return_value=["o9"])
+    gone = replace(raw("organization", "o9", T1), deleted=True)
+    connector = FakeConnector(
+        community={("organization", "ws-1"): [raw("organization", "o1", T1), gone]}
+    )
+
+    # Act
+    run = run_sync(session, source(), OmerloReader(connector), archive=None, full=full, now=clock())
+
+    # Assert
+    assert run.status == "succeeded"
+    close_deleted.assert_called_once_with(session, run, "organization", {"o9"})
+    # The mocked close_unseen removes o5 in a full run.
+    assert run.counts["removed"] == (2 if full else 1)
+    assert run.counts["fetched"] == 1
+    assert [r.external_id for r in archive.call_args.args[3]] == ["o1"]
+    assert [r.external_id for r in upsert.call_args.args[2]] == ["o1"]
 
 
 def test_a_fetch_error_fails_the_run_and_stores_nothing(session, stored):

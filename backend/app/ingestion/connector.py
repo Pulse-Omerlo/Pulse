@@ -22,6 +22,8 @@ class RawRecord:
     payload: dict[str, Any]
     # Set when the record only exists under another one, e.g. an event's session.
     parent_external_id: str | None = None
+    # The source says the record no longer exists; the payload is the last one listed.
+    deleted: bool = False
 
 
 class Connector(Protocol):

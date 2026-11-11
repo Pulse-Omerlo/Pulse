@@ -4,13 +4,14 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import sync as sync_command
 from app.ingestion.connector import parse_timestamp
-from app.ingestion.omerlo.connector import OmerloConnector
+from app.ingestion.omerlo.connector import COMMUNITY_DETAIL, OmerloConnector
 from app.models import IndustryClassification, RecordChange, Source, SourceRecord, SyncRun, Tenant
 from app.models import RawRecord as RawRecordRow
 from app.seed import seed
@@ -320,6 +321,65 @@ def test_a_sync_after_the_demo_mutation_records_the_expected_changes(session, sy
         "removed": len(removed),
     }
     assert run.counts["new"] == len(wanted.added)
+
+
+def deleted_after_listing(app, *paths: str):
+    """The mock server, except that `paths` answer 404 as if deleted after being listed."""
+    gone = {"/api" + path for path in paths}
+
+    async def asgi(scope, receive, send):
+        if scope["type"] == "http" and scope["path"] in gone:
+            response = JSONResponse({"error": "entity not found"}, status_code=404)
+            await response(scope, receive, send)
+            return
+        await app(scope, receive, send)
+
+    return asgi
+
+
+def current_version_id(session: Session, external_id: str):
+    return session.scalar(
+        select(SourceRecord.id).where(
+            SourceRecord.external_id == external_id, SourceRecord.valid_to.is_(None)
+        )
+    )
+
+
+def removal_of(session: Session, run: SyncRun, external_id: str) -> RecordChange:
+    return session.scalars(
+        select(RecordChange)
+        .join(SourceRecord, RecordChange.source_record_id == SourceRecord.id)
+        .where(RecordChange.sync_run_id == run.id, SourceRecord.external_id == external_id)
+    ).one()
+
+
+@pytest.mark.parametrize("full", [False, True])
+def test_a_record_deleted_after_it_was_listed_is_removed_in_any_run(
+    session, sync, mock_app, fixtures, full
+):
+    # Arrange
+    sync(full=True)
+    diff = apply_set(fixtures, DEMO)["tenants"][SLUG]
+    gone = next(entry["id"] for entry in diff["modified"] if entry["kind"] == "organizations")
+    last_version = current_version_id(session, gone)
+    detail = COMMUNITY_DETAIL.format(path="organizations", id=gone)
+
+    # Act
+    with mock_client(deleted_after_listing(mock_app, detail)) as client:
+        run = sync(full=full, client=client)
+
+    # Assert
+    assert run.status == "succeeded"
+    change = removal_of(session, run, gone)
+    assert (change.change_type, change.changed_fields) == ("removed", {})
+    assert change.source_record_id == last_version
+    assert gone not in current_ids(session)
+    removed = of_type(recorded_changes(session, run), "removed")
+    if full:
+        assert removed == expected(diff).removed | {("organization", gone)}
+    else:
+        assert removed == {("organization", gone)}
+    assert run.counts["removed"] == len(removed)
 
 
 def test_a_sync_with_no_source_changes_records_no_changes(session, sync):

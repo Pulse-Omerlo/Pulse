@@ -21,7 +21,7 @@ from app.ingestion.omerlo.mapping.batch import map_records
 from app.models import Source, SyncRun
 from app.services.industry import ClassificationReport, classify_organizations
 from app.services.record_changes import record_changes
-from app.services.source_records import close_unseen, upsert_records
+from app.services.source_records import close_deleted, close_unseen, upsert_records
 from app.storage.archive import PayloadArchive
 from app.storage.raw_records import archive_records
 
@@ -52,6 +52,8 @@ class Fetched:
     kinds: tuple[str, ...] | None = None
     # Archived with the run but neither counted nor mapped, e.g. an imported file.
     archive_only: list[RawRecord] = field(default_factory=list)
+    # Records the source reported deleted; their current versions are closed as removed.
+    deleted: list[RawRecord] = field(default_factory=list)
 
 
 class SourceReader(Protocol):
@@ -185,7 +187,8 @@ def fetch(connector: OmerloConnector, source: Source, *, full: bool) -> Fetched:
             workspace_id = workspace["id"]
             since = stored.get(workspace_id, {}).get(kind)
             records = list(connector.fetch_community(kind, workspace_id, since))
-            fetched.records += records
+            fetched.records += [r for r in records if not r.deleted]
+            fetched.deleted += [r for r in records if r.deleted]
             latest = newest(r for r in records if r.entity_kind == kind)
             if latest is not None:
                 fetched.workspace_newest.setdefault(workspace_id, {})[kind] = latest
@@ -214,9 +217,9 @@ def store(
             for failure in mapped.failures[:MAX_REPORTED_FAILURES]
         ]
     upserted = upsert_records(session, run, mapped.records)
-    removed: list[str] = []
+    removed = close_reported_deleted(session, run, fetched.deleted)
     if run.mode == "full":
-        removed = close_unseen(
+        removed += close_unseen(
             session, run, keep={f.external_id for f in mapped.failures}, kinds=fetched.kinds
         )
     # Reads the versions this run opened and closed, so it comes after both.
@@ -229,6 +232,17 @@ def store(
         "removed": len(removed),
         "failed": len(mapped.failures),
     }
+
+
+def close_reported_deleted(session: Session, run: SyncRun, deleted: list[RawRecord]) -> list[str]:
+    ids_by_kind: dict[str, set[str]] = {}
+    for record in deleted:
+        ids_by_kind.setdefault(record.entity_kind, set()).add(record.external_id)
+    return [
+        external_id
+        for kind, external_ids in sorted(ids_by_kind.items())
+        for external_id in close_deleted(session, run, kind, external_ids)
+    ]
 
 
 def finish(

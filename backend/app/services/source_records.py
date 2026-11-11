@@ -6,7 +6,7 @@ from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from itertools import batched
 
-from sqlalchemy import Select, bindparam, or_, select, text, update
+from sqlalchemy import ColumnElement, Select, bindparam, or_, select, text, update
 from sqlalchemy.dialects.postgresql import ARRAY, UUID, distinct_on
 from sqlalchemy.orm import Session
 
@@ -180,21 +180,39 @@ def close_unseen(
     taken for removed. `kinds`, when given, limits removal to the entity kinds the run
     read in full. Returns the external ids closed.
     """
+    conditions = [SourceRecord.last_seen_run != run.id]
+    if keep:
+        conditions.append(SourceRecord.external_id.not_in(list(keep)))
+    if kinds is not None:
+        conditions.append(SourceRecord.kind.in_(list(kinds)))
+    return close_current(session, run, *conditions)
+
+
+def close_deleted(
+    session: Session, run: SyncRun, kind: str, external_ids: Iterable[str]
+) -> list[str]:
+    """Close and mark removed the current versions of records the source reported deleted."""
+    closed: list[str] = []
+    for batch in batched(sorted(set(external_ids)), BATCH_SIZE):
+        closed += close_current(
+            session, run, SourceRecord.kind == kind, SourceRecord.external_id.in_(batch)
+        )
+    return sorted(closed)
+
+
+def close_current(session: Session, run: SyncRun, *conditions: ColumnElement[bool]) -> list[str]:
+    """Close the current versions of the run's source matching `conditions` as removed by `run`."""
     statement = (
         update(SourceRecord)
         .where(
             SourceRecord.tenant_id == run.tenant_id,
             SourceRecord.source_id == run.source_id,
             SourceRecord.valid_to.is_(None),
-            SourceRecord.last_seen_run != run.id,
+            *conditions,
         )
         .values(valid_to=run.started_at, removed_run=run.id)
         .returning(SourceRecord.external_id)
     )
-    if keep:
-        statement = statement.where(SourceRecord.external_id.not_in(list(keep)))
-    if kinds is not None:
-        statement = statement.where(SourceRecord.kind.in_(list(kinds)))
     rows = session.execute(statement, execution_options={"synchronize_session": False})
     return sorted(rows.scalars())
 
