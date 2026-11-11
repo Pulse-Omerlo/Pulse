@@ -75,10 +75,15 @@ def rule_weight(rule: str) -> float:
     return RULE_WEIGHTS.get(rule, 0.0)
 
 
-def link_confidence(edge: MatchCandidateData) -> float:
+def edge_strength(edge: MatchCandidateData) -> float:
     """The rule weight, scaled by the similarity when the rule has one."""
     similarity = 1.0 if edge.score is None else edge.score
-    return round(rule_weight(edge.rule) * similarity, 3)
+    return rule_weight(edge.rule) * similarity
+
+
+def link_confidence(edge: MatchCandidateData) -> float:
+    """The edge strength as stored on a link, to three decimals."""
+    return round(edge_strength(edge), 3)
 
 
 def candidate_score(edge: MatchCandidateData) -> float:
@@ -96,9 +101,12 @@ def decided_by(edge: MatchCandidateData) -> str:
 
 
 def strength_key(edge: MatchCandidateData) -> tuple[int, float, UUID, UUID]:
-    """Sort key putting the strongest edge first: Tier 1 priority, then confidence, then pair."""
+    """Sort key putting the strongest edge first: Tier 1 priority, then strength, then pair.
+
+    The strength is not rounded, so two different similarities never tie.
+    """
     rank = RULE_PRIORITIES.index(edge.rule) if edge.rule in TIER1_RULES else len(RULE_PRIORITIES)
-    return (rank, -link_confidence(edge), *edge.providePair)
+    return (rank, -edge_strength(edge), *edge.providePair)
 
 
 def can_merge_organizations(edge: MatchCandidateData) -> bool:

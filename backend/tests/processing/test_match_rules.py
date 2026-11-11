@@ -102,3 +102,15 @@ def test_decisions_name_their_tier_and_rule_version():
     assert match_rules.decided_by(edge("domain")) == "tier1:tier1-v1"
     assert match_rules.rule_set_version("fuzzy_name") == "tier2-v1"
     assert match_rules.rule_set_version("name_city") == "tier1-v1"
+
+
+def test_scores_that_round_alike_still_sort_apart():
+    # Arrange
+    # 0.9 x 0.8755 and 0.9 x 0.8754 both round to 0.788.
+    lower = fuzzy(0.8754, UUID(int=1), UUID(int=2))
+    higher = fuzzy(0.8755, UUID(int=3), UUID(int=4))
+    # Act
+    ordered = sorted([lower, higher], key=match_rules.strength_key)
+    # Assert
+    assert match_rules.link_confidence(lower) == match_rules.link_confidence(higher)
+    assert ordered == [higher, lower]
