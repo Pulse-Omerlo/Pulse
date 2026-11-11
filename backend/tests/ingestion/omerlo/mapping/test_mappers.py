@@ -217,9 +217,25 @@ def test_person_keeps_only_the_minimal_fields():
         "job_titles": {"fr": "Directrice générale", "en": "General Manager"},
         "identifiers": {
             "emails": ["marie-eve@boulangeriestroch.ca"],
+            "phones": ["+14185550199"],
             "linkedin": ["in/marie-eve-tremblay"],
         },
     }
+
+
+def test_person_stores_normalized_phones_in_identifiers():
+    # Arrange
+    payload = payloads.person()
+    payload["contact"] = [
+        payloads.contact("en", phone="+1 (514) 555-0100", email="a@example.com"),
+        payloads.contact("fr", phone="514-555-0100"),
+    ]
+
+    # Act
+    record = map_record("person", payload)
+
+    # Assert
+    assert record.attributes["identifiers"]["phones"] == ["+15145550100"]
 
 
 def test_person_with_only_one_name_part_is_mapped():

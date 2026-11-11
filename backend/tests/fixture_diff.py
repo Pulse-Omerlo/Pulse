@@ -28,7 +28,7 @@ IDENTIFIERS = {
     "website": {"attributes.identifiers.domains", "domain"},
     "linkedin": {"attributes.identifiers.linkedin", "linkedin"},
 }
-PERSON_IDENTIFIERS = {key: IDENTIFIERS[key] for key in ("email", "linkedin")}
+PERSON_IDENTIFIERS = {key: IDENTIFIERS[key] for key in ("email", "phone", "linkedin")}
 NAMES = {"organization": ("name",), "person": ("first_name", "last_name")}
 
 Key = tuple[str, str]
