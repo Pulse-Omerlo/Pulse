@@ -37,7 +37,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | --- | --- | --- |
 | Claude Code (Anthropic) | AbdelrahmanWM | Writing code and tests from issues, reviewing diffs, drafting PR descriptions and issues |
 | Cursor (agent mode) | mijanullah12 | Designing and writing the file import and its tests from issue #24, drafting commit messages and docs |
-| Cursor (agent mode) | hendriktebeng | Implementing automatic org-link recheck (#110) and its tests |
+| Cursor (agent mode) | hendriktebeng | Implementing automatic org-link recheck (#110) and people matching (#112) |
 
 ## Features built with substantial AI help
 
@@ -56,6 +56,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Industry classification of organizations | #149 | |
 | Tenant API for organizations, runs and duplicates | #63 | |
 | Recheck automatic organization links on matching-field change | #110 | |
+| Match people with name plus a secondary identifier | #112 | |
 
 ## Details
 
@@ -221,3 +222,17 @@ domain, LinkedIn removal and rename. Rematch stays in the existing
 **Verification:** unit tests cover field diffs, evidence verdicts and sync
 wiring. Integration tests against Postgres cover drops, empty organizations,
 as-of membership and unchanged old-version links.
+
+### Match people with name plus a secondary identifier (#112)
+
+Cursor wrote the `person` / `person_link` tables, Tier 1 people matching (name
+plus email, phone, person LinkedIn, or file-import organization id), kind-
+dispatched automatic-link recheck for people, post-sync people matching in a
+separate try from organizations, and separate people scoring in the Tier 1
+accuracy report. Profiles-block and event-speaker shared-organization signals
+are waived for this PR.
+
+**Verification:** unit tests cover classify rules, conflicts, rejected blocks,
+sync wiring and person recheck fields. Integration tests (when
+`TEST_DATABASE_URL` is set) cover people links, copy-on-version and isolation
+graph coverage.
