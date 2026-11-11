@@ -8,12 +8,8 @@ from app.core.logging import configure_logging, get_logger
 from app.ingestion.mapped import clean_mapped
 from app.ingestion.omerlo.mapping.mappers import map_record
 from app.models import SourceRecord
-from app.processing.entity_resolution import (
-    blocked_matches,
-    components,
-    conflicting_identifiers,
-    load_generic_domains,
-)
+from app.processing.clustering import member_from_record, plan_clusters
+from app.processing.entity_resolution import blocked_matches, load_generic_domains
 from app.processing.tier1_accuracy import combine, expected_pairs, predicted_pairs, score
 from synthetic.omerlo_fixtures import DEFAULT_SEED, OmerloFixtureGenerator
 
@@ -52,15 +48,11 @@ def build_records(tenant_number, tenant_data):
 def tier1_groups(records):
     """Groups of external ids that Tier 1 would link to one organization."""
     by_id = {record.id: record for record in records}
-    matches = blocked_matches(records, load_generic_domains())
-    groups = []
-    for group in components(matches):
-        group_records = [by_id[record_id] for record_id in group]
-        # Tier 1 sends a group with conflicting identifiers to review instead of linking it.
-        if conflicting_identifiers(group_records):
-            continue
-        groups.append({record.external_id for record in group_records})
-    return groups
+    generic_domains = load_generic_domains()
+    members = {record.id: member_from_record(record, generic_domains) for record in records}
+    # The same plan as the matcher, so conflicting links are cut here too.
+    plan = plan_clusters(members, blocked_matches(records, generic_domains), {})
+    return [{by_id[record_id].external_id for record_id in c.members} for c in plan.clusters]
 
 
 def score_tenant(tenant_number, tenant_data):

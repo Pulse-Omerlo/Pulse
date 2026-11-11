@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app.ingestion.mapped import MappedRecord
 from app.models import MatchCandidate, Organization, OrgLink, Source, SourceRecord, SyncRun, Tenant
 from app.processing.entity_resolution import MatchResult, match_organizations
-from app.services.organizations import current_records
+from app.services.organizations import current_records, surviving_organization_id
 from app.services.source_records import upsert_records
 
 pytestmark = pytest.mark.integration
@@ -68,6 +68,28 @@ def manual_link(session, record):
     session.add(link)
     session.flush()
     return link
+
+
+def rule_link(session, records, organization=None):
+    """Link records to one organization as an earlier Tier 1 run would have."""
+    if organization is None:
+        organization = Organization(tenant_id=records[0].tenant_id, display_name="Old name")
+        session.add(organization)
+        session.flush()
+    for record in records:
+        session.add(
+            OrgLink(
+                tenant_id=record.tenant_id,
+                source_record_id=record.id,
+                organization_id=organization.id,
+                method="domain",
+                confidence=1,
+                decided_by="tier1:tier1-v1",
+                evidence=[],
+            )
+        )
+    session.flush()
+    return organization
 
 
 def candidate(session, records, status):
@@ -128,7 +150,7 @@ def test_manual_link_is_reused_without_overwriting_its_evidence(session):
     assert session.get(OrgLink, records[1].id).organization_id == original.organization_id
 
 
-def test_existing_organizations_are_not_merged(session):
+def test_manual_organizations_are_not_merged(session):
     # Arrange
     tenant, _, _, records = setup_records(session, [{"domain": "exemple.ca"}] * 2)
     links = [manual_link(session, record) for record in records]
@@ -155,10 +177,17 @@ def test_rejection_cannot_be_bypassed_through_a_third_record(session):
     # Act
     result = match_organizations(session, tenant.id)
     session.expire_all()
-    # Assert
-    assert result == MatchResult(0, 0, 2)
+    links = [session.get(OrgLink, record.id) for record in records]
+    # Assert: the domain pair is still linked, the LinkedIn link to the rejected record is not.
+    assert result == MatchResult(1, 2, 1)
     assert decision.status == "rejected"
-    assert all(session.get(OrgLink, record.id) is None for record in records)
+    assert links[0].organization_id == links[1].organization_id and links[2] is None
+    saved = session.scalar(
+        select(MatchCandidate).where(
+            MatchCandidate.tenant_id == tenant.id, MatchCandidate.status == "pending"
+        )
+    )
+    assert {saved.left_record_id, saved.right_record_id} == {records[1].id, records[2].id}
     assert match_organizations(session, tenant.id) == MatchResult()
 
 
@@ -272,3 +301,110 @@ def test_caller_can_roll_back_all_matching_writes(session):
     assert result == MatchResult(1, 2, 0)
     assert all(session.get(OrgLink, record.id) is None for record in records)
     assert session.scalar(select(Organization).where(Organization.tenant_id == tenant.id)) is None
+
+
+def chained_organizations(session):
+    """Record 0 in one organization, 1 and 2 in another; 3 and 4 chain them together."""
+    tenant, run, mapped, records = setup_records(
+        session,
+        [
+            {"domain": "exemple.ca", "attributes": {"name": "Exemple"}},
+            {"linkedin": "company/exemple", "attributes": {"name": "Exemple Inc."}},
+            {"linkedin": "company/exemple", "attributes": {"name": "Exemple"}},
+            {"domain": "exemple.ca"},
+            {"domain": "exemple.ca", "linkedin": "company/exemple"},
+        ],
+    )
+    small = rule_link(session, [records[0]])
+    large = rule_link(session, records[1:3])
+    older = Organization(tenant_id=tenant.id, display_name="Older", merged_into=small.id)
+    session.add(older)
+    session.flush()
+    return tenant, run, mapped, records, small, large, older
+
+
+def test_chain_merges_organizations_and_old_ids_still_resolve(session):
+    # Arrange
+    tenant, _, _, records, small, large, older = chained_organizations(session)
+    # Act
+    first = match_organizations(session, tenant.id)
+    session.expire_all()
+    second = match_organizations(session, tenant.id)
+    links = [session.get(OrgLink, record.id) for record in records]
+    # Assert: the organization with more links survives, and merged_into stays one hop.
+    assert first == MatchResult(0, 2, 0, 1) and second == MatchResult()
+    assert {link.organization_id for link in links} == {large.id}
+    assert (small.merged_into, older.merged_into, large.merged_into) == (large.id, large.id, None)
+    assert (large.display_name, large.primary_domain) == ("Exemple", "exemple.ca")
+    ids = (small.id, older.id, large.id)
+    assert {surviving_organization_id(session, tenant.id, i) for i in ids} == {large.id}
+
+
+def test_merge_leaves_closed_versions_on_the_old_organization(session):
+    # Arrange
+    tenant, run, mapped, records, small, large, _ = chained_organizations(session)
+    next_run = SyncRun(
+        tenant_id=tenant.id, source_id=run.source_id, started_at=START + timedelta(days=1)
+    )
+    session.add(next_run)
+    session.flush()
+    upsert_records(session, next_run, [replace(mapped[0], attributes={"name": "Renamed"})])
+    # Act
+    result = match_organizations(session, tenant.id)
+    session.expire_all()
+    # Assert
+    assert result.organizations_merged == 1
+    assert session.get(OrgLink, records[0].id).organization_id == small.id
+    members = current_records(session, tenant.id, large.id)
+    assert len(members) == 5 and records[0].id not in {member.id for member in members}
+
+
+def test_merge_is_rolled_back_with_the_callers_transaction(session):
+    # Arrange
+    tenant, _, _, records, small, _, _ = chained_organizations(session)
+    transaction = session.begin_nested()
+    # Act
+    result = match_organizations(session, tenant.id)
+    transaction.rollback()
+    session.expire_all()
+    # Assert
+    assert result.organizations_merged == 1
+    assert session.get(Organization, small.id).merged_into is None
+    assert session.get(OrgLink, records[0].id).organization_id == small.id
+    assert session.get(OrgLink, records[4].id) is None
+
+
+def test_conflicting_chain_links_the_clean_part_and_sets_aside_the_rest(session):
+    # Arrange
+    tenant, _, _, records = setup_records(
+        session,
+        [
+            {"domain": "parent.ca", "linkedin": "company/group"},
+            {"domain": "parent.ca"},
+            {"domain": "subsidiary.ca", "linkedin": "company/group"},
+        ],
+    )
+    # Act
+    result = match_organizations(session, tenant.id)
+    links = [session.get(OrgLink, record.id) for record in records]
+    saved = session.scalar(select(MatchCandidate).where(MatchCandidate.tenant_id == tenant.id))
+    # Assert
+    assert result == MatchResult(1, 2, 1)
+    assert links[0].organization_id == links[1].organization_id and links[2] is None
+    assert saved.matched_fields[0]["field"] == "linkedin"
+    organization = session.get(Organization, links[0].organization_id)
+    assert organization.primary_domain == "parent.ca"
+    assert match_organizations(session, tenant.id) == MatchResult()
+
+
+def test_merged_ids_do_not_resolve_from_another_tenant(session):
+    # Arrange
+    tenant, _, _, _, small, large, _ = chained_organizations(session)
+    other, _, _, _ = setup_records(session, [{"domain": "exemple.ca"}])
+    # Act
+    match_organizations(session, tenant.id)
+    match_organizations(session, other.id)
+    # Assert
+    assert surviving_organization_id(session, other.id, small.id) is None
+    assert surviving_organization_id(session, tenant.id, small.id) == large.id
+    assert current_records(session, other.id, large.id) == []

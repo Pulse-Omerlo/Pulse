@@ -42,6 +42,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         organizations_created=result.organizations_created,
         links_created=result.links_created,
         candidates_created=result.candidates_created,
+        organizations_merged=result.organizations_merged,
     )
 
 

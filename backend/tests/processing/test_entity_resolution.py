@@ -74,24 +74,6 @@ def test_bad_domain_config_is_rejected(domain_file, config):
     assert "non-empty domains list" in str(error.value)
 
 
-def test_external_ids_ignore_bad_entries_but_preserve_case():
-    # Arrange
-    item = record(
-        external_ids={
-            " crm ": [" ABC ", "ABC", "abc", "", None, 12],
-            "neq": ["ABC"],
-            " ": ["bad"],
-            4: ["bad"],
-            "broken": "123",
-        }
-    )
-    # Act
-    keys = er.external_keys(item)
-    # Assert
-    assert keys == {("crm", "ABC"), ("crm", "abc"), ("neq", "ABC")}
-    assert er.external_keys(record(external_ids=None)) == set()
-
-
 @pytest.mark.parametrize(
     ("fields", "expected"),
     [
@@ -217,43 +199,6 @@ def test_evidence_keeps_both_fields_and_supporting_version():
     assert all(entry["matched_record_id"] == str(match.right) for entry in proof)
 
 
-@pytest.mark.parametrize(
-    ("first", "second", "conflict"),
-    [
-        ({"linkedin": "company/parent"}, {"linkedin": "company/subsidiary"}, True),
-        ({"external_ids": {"neq": ["123"]}}, {"external_ids": {"neq": ["456"]}}, True),
-        ({"external_ids": {"crm": ["old", "123"]}}, {"external_ids": {"crm": ["123"]}}, False),
-        ({"external_ids": {"crm": ["123"]}}, {}, False),
-    ],
-)
-def test_conflicting_ids_and_missing_ids(first, second, conflict):
-    # Arrange
-    records = [record(1, **first), record(2, **second)]
-    # Act
-    result = er.conflicting_identifiers(records)
-    # Assert
-    assert result is conflict
-
-
-def test_components_follow_strong_paths_and_ignore_weak_bridges():
-    # Arrange
-    a, b, c, d, e = [UUID(int=n) for n in range(1, 6)]
-    edges = [
-        er.MatchCandidateData(x, y, rule, ())
-        for x, y, rule in [
-            (a, b, "domain"),
-            (b, c, "linkedin"),
-            (a, c, "external_id"),
-            (c, d, "name_only"),
-            (d, e, "domain"),
-        ]
-    ]
-    # Act
-    groups = er.components(edges)
-    # Assert
-    assert groups == [{a, b, c}, {d, e}]
-
-
 def test_empty_tenant_creates_nothing_and_does_not_commit(session):
     # Arrange
     session.scalar.return_value = Tenant(id=TENANT)
@@ -311,7 +256,7 @@ def test_command_commits_and_logs_summary(mocker, session, capsys):
     mocker.patch.object(command, "get_session_factory", return_value=lambda: session)
     mocker.patch.object(command, "find_tenant", return_value=Tenant(id=TENANT))
     matcher = mocker.patch.object(
-        command, "match_organizations", return_value=er.MatchResult(1, 2, 3)
+        command, "match_organizations", return_value=er.MatchResult(1, 2, 3, 4)
     )
     # Act
     command.main(["--tenant", "demo-capitale"])
@@ -325,6 +270,7 @@ def test_command_commits_and_logs_summary(mocker, session, capsys):
     assert summary["organizations_created"] == 1
     assert summary["links_created"] == 2
     assert summary["candidates_created"] == 3
+    assert summary["organizations_merged"] == 4
 
 
 def test_command_unknown_tenant_does_not_commit(mocker, session, capsys):
