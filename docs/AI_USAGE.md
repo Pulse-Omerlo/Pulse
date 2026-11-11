@@ -53,6 +53,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Sync runs page | #67 | #127 |
 | CSV and JSON file import | #24 | |
 | Industry classification of organizations | #149 | |
+| Sector mix and gaps | #150 | |
 
 ## Details
 
@@ -189,3 +190,20 @@ tenant isolation, and that a real sync classifies every current organization.
   out, and the file says why.
 - An integration test closed a version with an end date before its start,
   which the `valid_range` check rejects. It now sets the start date explicitly.
+
+### Sector mix and gaps (#150)
+
+Claude Code wrote the sector mix calculation, the gap rules, the `sector_mix`
+table and its migration, the step that measures the mix after each successful
+sync, and the two read endpoints.
+
+**Verification:** unit tests run a small hand-built network whose shares and
+gaps were worked out in advance (merged duplicates counted once, ties, the
+threshold itself, targets with no organization, no linked people). The
+integration tests check stored evidence, planted gaps, one result per run,
+tenant isolation, and that after a sync of synthetic data the counts add up to
+the stored organizations and classifications.
+
+**Problem found:** the latest result was first chosen by the time it was
+computed, which is the same for every row written in one transaction. It is
+now chosen by the start of its sync run.
