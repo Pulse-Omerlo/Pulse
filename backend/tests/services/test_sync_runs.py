@@ -169,8 +169,16 @@ def classified(mocker):
 
 @pytest.fixture(autouse=True)
 def matched(mocker):
-    """The Tier 1 matching run after a successful sync, mocked."""
+    """The Tier 1 organization matching run after a successful sync, mocked."""
     return mocker.patch.object(sync_runs, "match_organizations", return_value=MatchResult())
+
+
+@pytest.fixture(autouse=True)
+def matched_people(mocker):
+    """The Tier 1 people matching run after a successful sync, mocked."""
+    from app.processing.person_resolution import PersonMatchResult
+
+    return mocker.patch.object(sync_runs, "match_people", return_value=PersonMatchResult())
 
 
 @pytest.fixture(autouse=True)
@@ -238,11 +246,17 @@ def test_a_successful_run_records_its_counts_and_advances_the_watermarks(session
             "links_created": 0,
             "candidates_created": 0,
         },
+        "matching_people": {
+            "people_created": 0,
+            "people_merged": 0,
+            "links_created": 0,
+            "candidates_created": 0,
+        },
     }
     assert target.workspace_watermarks == {"ws-1": {"organization": T1.isoformat()}}
     assert detected == [(session, run)]
-    # Start, archive, store, then the matching and the classification.
-    assert session.commit.call_count == 5
+    # Start, archive, store, org matching, people matching, then classification.
+    assert session.commit.call_count == 6
 
 
 def test_an_incremental_run_never_marks_records_removed(session, stored):
@@ -458,13 +472,22 @@ def test_a_failed_classification_leaves_the_run_succeeded(session, stored, class
     session.rollback.assert_called_once()
 
 
-def test_a_successful_run_matches_the_versions_it_opened(mocker, session, stored, matched):
+def test_a_successful_run_matches_the_versions_it_opened(
+    mocker, session, stored, matched, matched_people
+):
     # Arrange
+    from app.processing.person_resolution import PersonMatchResult
+
     target = source()
     changed_ids = [uuid.uuid4(), uuid.uuid4()]
+    person_ids = [uuid.uuid4()]
     found_ids = mocker.patch.object(sync_runs, "changed_organization_ids", return_value=changed_ids)
+    found_people = mocker.patch.object(sync_runs, "changed_person_ids", return_value=person_ids)
     matched.return_value = MatchResult(
         organizations_created=1, links_created=3, candidates_created=2, organizations_merged=2
+    )
+    matched_people.return_value = PersonMatchResult(
+        people_created=1, links_created=2, candidates_created=0, people_merged=1
     )
 
     # Act
@@ -472,16 +495,24 @@ def test_a_successful_run_matches_the_versions_it_opened(mocker, session, stored
 
     # Assert
     found_ids.assert_called_once_with(session, run)
+    found_people.assert_called_once_with(session, run)
     matched.assert_called_once_with(session, target.tenant_id, changed_ids)
+    matched_people.assert_called_once_with(session, target.tenant_id, person_ids)
     assert run.counts["matching"] == {
         "organizations_created": 1,
         "organizations_merged": 2,
         "links_created": 3,
         "candidates_created": 2,
     }
+    assert run.counts["matching_people"] == {
+        "people_created": 1,
+        "people_merged": 1,
+        "links_created": 2,
+        "candidates_created": 0,
+    }
 
 
-def test_a_failed_run_matches_nothing(session, stored, matched):
+def test_a_failed_run_matches_nothing(session, stored, matched, matched_people):
     # Arrange
     _, upsert, _ = stored
     upsert.side_effect = RuntimeError("database went away")
@@ -492,11 +523,13 @@ def test_a_failed_run_matches_nothing(session, stored, matched):
     # Assert
     assert run.status == "failed"
     assert "matching" not in run.counts
+    assert "matching_people" not in run.counts
     matched.assert_not_called()
+    matched_people.assert_not_called()
 
 
 def test_a_failed_matching_is_recorded_and_keeps_the_run_and_classification(
-    session, stored, matched, classified
+    session, stored, matched, matched_people, classified
 ):
     # Arrange
     matched.side_effect = ValueError("generic_domains.toml needs a non-empty domains list")
@@ -510,7 +543,36 @@ def test_a_failed_matching_is_recorded_and_keeps_the_run_and_classification(
     assert run.counts["matching"] == {
         "error": "ValueError: generic_domains.toml needs a non-empty domains list"
     }
+    assert run.counts["matching_people"] == {
+        "people_created": 0,
+        "people_merged": 0,
+        "links_created": 0,
+        "candidates_created": 0,
+    }
     session.rollback.assert_called_once()
+    classified.assert_called_once()
+    matched_people.assert_called_once()
+
+
+def test_a_failed_people_match_keeps_org_matching_counts(
+    session, stored, matched, matched_people, classified
+):
+    # Arrange
+    matched.return_value = MatchResult(organizations_created=1, links_created=1)
+    matched_people.side_effect = ValueError("people matcher blew up")
+
+    # Act
+    run = run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    # Assert
+    assert run.status == "succeeded"
+    assert run.counts["matching"] == {
+        "organizations_created": 1,
+        "organizations_merged": 0,
+        "links_created": 1,
+        "candidates_created": 0,
+    }
+    assert run.counts["matching_people"] == {"error": "ValueError: people matcher blew up"}
     classified.assert_called_once()
 
 
@@ -541,7 +603,7 @@ def test_recheck_runs_after_close_and_before_detect(session, stored, rechecked):
     }
     rechecked.assert_called_once()
     assert rechecked.call_args.args[2] == []
-    assert session.commit.call_count == 5
+    assert session.commit.call_count == 6
 
 
 def test_recheck_receives_carried_pairs(session, stored, rechecked):

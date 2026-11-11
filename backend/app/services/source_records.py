@@ -31,6 +31,18 @@ COPY_ORG_LINKS = text(
     """
 ).bindparams(*_ID_ARRAYS)
 
+COPY_PERSON_LINKS = text(
+    f"""
+    INSERT INTO person_link (source_record_id, person_id, tenant_id, method, confidence,
+                             decided_by, decided_at, evidence)
+    SELECT m.new_id, l.person_id, l.tenant_id, l.method, l.confidence, l.decided_by,
+           l.decided_at, l.evidence
+    FROM person_link l
+    JOIN {_ID_PAIRS} ON l.source_record_id = m.old_id
+    WHERE l.tenant_id = :tenant_id
+    """
+).bindparams(*_ID_ARRAYS)
+
 # Moves both sides of each candidate to their new versions, keeping the pair ordered. Only
 # pairs of two current versions are copied: a pair with an older version is history.
 COPY_MATCH_CANDIDATES = text(
@@ -167,6 +179,7 @@ def apply_plan(session: Session, run: SyncRun, plan: Plan) -> None:
         old_ids, new_ids = (list(ids) for ids in zip(*plan.carried, strict=True))
         params = {"tenant_id": run.tenant_id, "old_ids": old_ids, "new_ids": new_ids}
         session.execute(COPY_ORG_LINKS, params)
+        session.execute(COPY_PERSON_LINKS, params)
         session.execute(COPY_MATCH_CANDIDATES, params)
 
 

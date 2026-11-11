@@ -14,6 +14,8 @@ from app.models import (
     MatchCandidate,
     Organization,
     OrgLink,
+    Person,
+    PersonLink,
     Source,
     SourceRecord,
     SyncRun,
@@ -207,6 +209,55 @@ def test_a_new_version_keeps_the_organization_link_and_candidates(session, runs)
     assert (copied.method, copied.confidence, copied.decided_by) == ("domain", 0.9, "tier1:domain")
     assert session.get(OrgLink, one.id) is not None
     assert candidates(session) == {("org-1", "org-2", "rejected"), ("org-1", "org-3", "accepted")}
+
+
+def person_record(
+    external_id: str = "person-1", name: str = "marie tremblay", **attributes
+) -> MappedRecord:
+    return MappedRecord(
+        kind="person",
+        external_id=external_id,
+        workspace_id=None,
+        name_normalized=name,
+        attributes={"identifiers": {"emails": ["marie@example.com"]}, **attributes},
+    )
+
+
+def person_link(session: Session, record: SourceRecord) -> Person:
+    person = Person(tenant_id=record.tenant_id, display_name="Marie Tremblay")
+    session.add(person)
+    session.flush()
+    session.add(
+        PersonLink(
+            tenant_id=record.tenant_id,
+            person_id=person.id,
+            source_record_id=record.id,
+            method="email",
+            confidence=1.0,
+            decided_by="tier1:email",
+        )
+    )
+    session.flush()
+    return person
+
+
+def test_a_new_person_version_keeps_the_person_link(session, runs):
+    # Arrange
+    first, second = runs.next(), runs.next()
+    upsert_records(session, first, [person_record()])
+    old = version_as_of(session, first, "person-1")
+    person = person_link(session, old)
+
+    # Act
+    upsert_records(session, second, [person_record(name="marie eve tremblay")])
+
+    # Assert
+    new = version_as_of(session, second, "person-1")
+    copied = session.get(PersonLink, new.id)
+    assert copied is not None
+    assert copied.person_id == person.id
+    assert session.get(PersonLink, old.id) is not None
+    assert (copied.method, copied.confidence) == ("email", 1.0)
 
 
 def test_two_changes_in_a_row_keep_three_versions_found_by_run(session, runs):
