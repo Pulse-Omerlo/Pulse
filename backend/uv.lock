@@ -189,7 +189,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = "==1.2.4" },
     { name = "python-multipart", specifier = "==0.0.32" },
     { name = "pyyaml", specifier = "==6.0.3" },
-    { name = "rapidfuzz", specifier = ">=3.14.6" },
+    { name = "rapidfuzz", specifier = "==3.14.6" },
     { name = "requests", specifier = "==2.34.2" },
     { name = "rich", specifier = "==15.0.0" },
     { name = "rich-toolkit", specifier = "==0.20.6" },
