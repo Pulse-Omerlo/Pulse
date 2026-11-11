@@ -11,7 +11,11 @@ from app import match as command
 from app.core.tenancy import TenantContextError
 from app.models import SourceRecord, Tenant
 from app.processing import entity_resolution as er
-from app.processing.normalization import normalize_city, normalize_organization_name
+from app.processing.normalization import (
+    normalize_city,
+    normalize_domain,
+    normalize_organization_name,
+)
 from app.services.organizations import current_records
 from app.sync import SyncCommandError
 
@@ -72,6 +76,33 @@ def test_bad_domain_config_is_rejected(domain_file, config):
         er.load_generic_domains()
     # Assert
     assert "non-empty domains list" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    "site",
+    [
+        "x.wixsite.com",
+        "x.wordpress.com",
+        "x.blogspot.com",
+        "x.github.io",
+        "x.myshopify.com",
+        "x.square.site",
+        "x.business.site",
+        "sites.google.com/view/x",
+        "linktr.ee/x",
+        "bit.ly/x",
+        "fb.com/x",
+    ],
+)
+def test_shared_hosts_never_match_two_organizations(site):
+    # Arrange: two unrelated sites on the same host keep only the host as their domain.
+    domain = normalize_domain(site)
+    left, right = record(1, domain=domain), record(2, domain=domain)
+    # Act
+    match = er.classify_pair(left, right, er.load_generic_domains())
+    # Assert
+    assert domain in er.load_generic_domains()
+    assert match is None
 
 
 @pytest.mark.parametrize(
