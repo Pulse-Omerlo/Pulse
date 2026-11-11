@@ -160,7 +160,7 @@ The mock server started with `--fixtures` reloads them when `manifest.json` chan
 
 ```bash
 cd backend
-uv run python -m synthetic.pipeline --mix synthetic/mixes/sector_gaps.toml                      # files in synthetic/out/
+uv run python -m synthetic.pipeline --mix synthetic/mixes/sector_gaps.toml                      # files in synthetic/out/mixes/
 uv run python -m synthetic.pipeline --mix synthetic/mixes/sector_gaps.toml --sink omerlo --dry-run
 uv run python -m synthetic.pipeline --mix synthetic/mixes/sector_gaps.toml --sink omerlo
 ```

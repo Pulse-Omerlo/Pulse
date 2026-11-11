@@ -26,7 +26,8 @@ from synthetic.pipeline.writers.base import OmerloWriter
 from synthetic.pipeline.writers.cli import CliWriter
 
 ROOT_ENV = Path(__file__).resolve().parents[3] / ".env"
-DEFAULT_OUT = Path(__file__).resolve().parent.parent / "out"
+# A folder of its own, so a run never rewrites the demo fixtures' manifest in synthetic/out.
+DEFAULT_OUT = Path(__file__).resolve().parent.parent / "out" / "mixes"
 
 EXIT_REJECTIONS = 1
 EXIT_REFUSED = 2

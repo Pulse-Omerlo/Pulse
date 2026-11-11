@@ -1,7 +1,13 @@
 # AI contribution: 50% or more AI-generated
 from pathlib import Path
 
-from synthetic.pipeline.__main__ import EXIT_AUTH, EXIT_REFUSED, EXIT_REJECTIONS, main
+from synthetic.pipeline.__main__ import (
+    EXIT_AUTH,
+    EXIT_REFUSED,
+    EXIT_REJECTIONS,
+    main,
+    parse_args,
+)
 from synthetic.pipeline.mixer import load_mix
 from synthetic.pipeline.plan import build_plan
 from synthetic.pipeline.target import load_target
@@ -103,3 +109,12 @@ def test_rejections_make_the_run_exit_with_one(tmp_path):
 
     # Assert
     assert code == EXIT_REJECTIONS
+
+
+def test_the_default_output_folder_leaves_the_demo_fixtures_alone():
+    # Act
+    args = parse_args(["--mix", "mix.toml"])
+
+    # Assert
+    assert args.out.name == "mixes"
+    assert args.out.parent.name == "out"
