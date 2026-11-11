@@ -189,36 +189,43 @@ def compute_mix(
 
 
 def find_gaps(share: SectorShare, gap_points: float) -> list[Gap]:
-    gaps = []
-    organizations = share.organization_share
-    if share.people_share is not None:
-        difference = organizations - share.people_share
-        if abs(difference) > gap_points:
-            more, fewer = "organizations", "people"
-            if difference < 0:
-                more, fewer = fewer, more
-            gaps.append(
-                Gap(
-                    code=share.code,
-                    kind=GAP_TOO_FEW_PEOPLE if difference > 0 else GAP_TOO_FEW_ORGANIZATIONS,
-                    size=round(abs(difference), 1),
-                    explanation=(
-                        f"{share.name} makes up {max(organizations, share.people_share):.1f}% "
-                        f"of the network's {more} but only "
-                        f"{min(organizations, share.people_share):.1f}% of its {fewer}."
-                    ),
-                )
-            )
-    if share.target is not None and organizations < share.target:
-        gaps.append(
-            Gap(
-                code=share.code,
-                kind=GAP_BELOW_TARGET,
-                size=round(share.target - organizations, 1),
-                explanation=(
-                    f"{share.name} makes up {organizations:.1f}% of the network's "
-                    f"organizations, below its target of {share.target:.1f}%."
-                ),
-            )
-        )
-    return gaps
+    found = (share_gap(share, gap_points), target_gap(share))
+    return [gap for gap in found if gap is not None]
+
+
+def share_gap(share: SectorShare, gap_points: float) -> Gap | None:
+    """The sector's shares of organizations and of people, when too far apart."""
+    if share.people_share is None:
+        return None
+    difference = share.organization_share - share.people_share
+    if abs(difference) <= gap_points:
+        return None
+    if difference > 0:
+        kind, more, fewer = GAP_TOO_FEW_PEOPLE, "organizations", "people"
+    else:
+        kind, more, fewer = GAP_TOO_FEW_ORGANIZATIONS, "people", "organizations"
+    high, low = sorted((share.organization_share, share.people_share), reverse=True)
+    return Gap(
+        code=share.code,
+        kind=kind,
+        size=round(abs(difference), 1),
+        explanation=(
+            f"{share.name} makes up {high:.1f}% of the network's {more} "
+            f"but only {low:.1f}% of its {fewer}."
+        ),
+    )
+
+
+def target_gap(share: SectorShare) -> Gap | None:
+    """The sector's share of organizations, when below the network's target."""
+    if share.target is None or share.organization_share >= share.target:
+        return None
+    return Gap(
+        code=share.code,
+        kind=GAP_BELOW_TARGET,
+        size=round(share.target - share.organization_share, 1),
+        explanation=(
+            f"{share.name} makes up {share.organization_share:.1f}% of the network's "
+            f"organizations, below its target of {share.target:.1f}%."
+        ),
+    )
