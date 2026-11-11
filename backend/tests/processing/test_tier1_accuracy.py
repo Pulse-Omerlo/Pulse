@@ -125,7 +125,7 @@ def test_hard_variant_shows_what_tier2_adds(capsys):
     totals = {e["event"]: e for e in events if e.get("tenant") == "all"}
     assert events[0]["variant"] == "hard"
     assert totals["tier1_score"]["recall"] == 0.0
-    assert totals["tier2_score"]["recall"] > 0.5
+    assert totals["tier2_score"]["recall"] > 0.2
     assert totals["tier2_score"]["precision"] == 1.0
     assert totals["tier2_score"]["linked"] > 0
 

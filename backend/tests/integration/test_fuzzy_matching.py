@@ -16,8 +16,10 @@ from tests.integration.test_entity_resolution import (
 
 pytestmark = pytest.mark.integration
 
-TREMBLAY = {"name_normalized": "boulangerie tremblay", "city": "quebec"}
-TREMBLAI = {"name_normalized": "boulangerie tremblai", "city": "quebec"}
+PHONE = {"identifiers": {"phones": ["+14185550001"]}}
+# One letter apart in the surname: a shared phone, not only a city, may link them.
+TREMBLAY = {"name_normalized": "boulangerie tremblay", "city": "quebec", "attributes": PHONE}
+TREMBLAI = {"name_normalized": "boulangerie tremblai", "city": "quebec", "attributes": PHONE}
 LOWEST_TIER1_WEIGHT = min(RULE_WEIGHTS[rule] for rule in ("domain", "linkedin", "name_city"))
 
 
@@ -27,7 +29,7 @@ def candidates(session, tenant):
     )
 
 
-def test_similar_names_in_one_city_are_linked_once(session):
+def test_similar_names_with_one_phone_are_linked_once(session):
     # Arrange
     tenant, _, _, records = setup_records(session, [TREMBLAY, TREMBLAI])
     # Act
@@ -43,7 +45,8 @@ def test_similar_names_in_one_city_are_linked_once(session):
         assert 0 < link.confidence < LOWEST_TIER1_WEIGHT
     fields = {entry["field"]: entry for entry in links[0].evidence}
     assert fields["name_similarity"]["value"] == "0.875"
-    assert fields["city"]["value"] == "quebec"
+    assert fields["phone"]["value"] == "+14185550001"
+    assert fields["name_difference"]["value"] == "spelling"
     assert fields["name_normalized"]["value"] == "boulangerie tremblay"
     assert fields["name_normalized"]["matched_value"] == "boulangerie tremblai"
     assert fields["name_normalized"]["matched_record_id"] == str(records[1].id)
@@ -53,7 +56,11 @@ def test_similar_names_in_one_city_are_linked_once(session):
 def test_similar_names_without_a_secondary_signal_wait_for_review(session):
     # Arrange
     tenant, _, _, records = setup_records(
-        session, [{**TREMBLAY, "city": None}, {**TREMBLAI, "city": None}]
+        session,
+        [
+            {**TREMBLAY, "city": None, "attributes": {}},
+            {**TREMBLAI, "city": None, "attributes": {}},
+        ],
     )
     # Act
     first = match_organizations(session, tenant.id)
@@ -67,6 +74,22 @@ def test_similar_names_without_a_secondary_signal_wait_for_review(session):
     left, right = sorted(records, key=lambda record: record.id)
     assert (names["value"], names["matched_value"]) == (left.name_normalized, right.name_normalized)
     assert names["matched_record_id"] == str(right.id)
+    assert all(session.get(OrgLink, record.id) is None for record in records)
+
+
+def test_different_surnames_one_letter_apart_in_one_city_wait_for_review(session):
+    # Arrange
+    tenant, _, _, records = setup_records(
+        session,
+        [
+            {"name_normalized": "boulangerie martin", "city": "quebec"},
+            {"name_normalized": "boulangerie marin", "city": "quebec"},
+        ],
+    )
+    # Act
+    result = match_organizations(session, tenant.id)
+    # Assert
+    assert result == MatchResult(0, 0, 1)
     assert all(session.get(OrgLink, record.id) is None for record in records)
 
 

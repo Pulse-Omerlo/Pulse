@@ -8,7 +8,10 @@ from uuid import UUID
 import pytest
 
 from app.processing import fuzzy_matching as fm
+from app.processing.fuzzy_profile import name_profile
 from tests.processing.fuzzy_helpers import CONFIG, EXCLUDED, record
+
+PHONE = "+14185550001"
 
 
 def match_rules(*records, config=CONFIG, known=frozenset()):
@@ -60,8 +63,8 @@ def test_names_of_generic_words_only_score_zero():
 
 def test_threshold_is_inclusive():
     # Arrange
-    left = record(1, "boulangerie tremblay", city="quebec")
-    right = record(2, "boulangerie tremblai", city="quebec")
+    left = record(1, "boulangerie tremblay", phones=[PHONE])
+    right = record(2, "boulangerie tremblai", phones=[PHONE])
     score = fm.similarity(left.name_normalized, right.name_normalized, CONFIG)
     # Act
     at = match_rules(left, right, config=replace(CONFIG, threshold=score))
@@ -103,8 +106,9 @@ def test_threshold_is_inclusive():
 )
 def test_secondary_signals_decide_between_link_and_review(left_fields, right_fields, rule):
     # Arrange
+    # Only a generic word differs, so a shared city is enough to link.
     left = record(1, "boulangerie tremblay", **left_fields)
-    right = record(2, "boulangerie tremblai", **right_fields)
+    right = record(2, "boulangeries tremblay", **right_fields)
     # Act
     rules = match_rules(left, right)
     # Assert
@@ -133,9 +137,110 @@ def test_two_stores_with_different_identifiers_in_one_city_are_only_reviewed(fie
 def test_person_linkedin_and_generic_domain_are_not_conflicts():
     # Arrange
     left = record(1, "boulangerie tremblay", city="quebec", linkedin="in/a", domain="gmail.com")
-    right = record(2, "boulangerie tremblai", city="quebec", linkedin="in/b")
+    right = record(2, "boulangeries tremblay", city="quebec", linkedin="in/b")
     # Act / Assert
     assert match_rules(left, right) == [((left.id, right.id), "fuzzy")]
+
+
+def test_two_different_free_mail_domains_are_not_a_conflict():
+    # Arrange
+    free = frozenset({"gmail.com", "hotmail.com"})
+    left = record(1, "boulangerie tremblay", city="quebec", domain="gmail.com")
+    right = record(2, "boulangeries tremblay", city="quebec", domain="hotmail.com")
+    # Act
+    [match] = fm.fuzzy_matches([left, right], free, config=CONFIG).matches
+    # Assert
+    assert match.rule == "fuzzy"
+
+
+@pytest.mark.parametrize(
+    "left,right,fields,rule,difference",
+    [
+        # Real, different surnames one letter apart: a shared city is not enough.
+        ("boulangerie martin", "boulangerie marin", {"city": "quebec"}, "fuzzy_name", "spelling"),
+        # "mart" and "mari" share no block, so these pairs also share the city.
+        (
+            "boulangerie martin",
+            "boulangerie marin",
+            {"city": "quebec", "phones": [PHONE]},
+            "fuzzy",
+            "spelling",
+        ),
+        (
+            "boulangerie martin",
+            "boulangerie marin",
+            {"city": "quebec", "emails": ["info@martin.ca"]},
+            "fuzzy",
+            "spelling",
+        ),
+        (
+            "couture construction",
+            "couturier construction",
+            {"city": "levis"},
+            "fuzzy_name",
+            "spelling",
+        ),
+        # Same words, another order.
+        (
+            "martin tremblay avocats",
+            "tremblay martin avocats",
+            {"city": "quebec"},
+            "fuzzy_name",
+            "order",
+        ),
+        (
+            "martin tremblay avocats",
+            "tremblay martin avocats",
+            {"phones": [PHONE]},
+            "fuzzy",
+            "order",
+        ),
+        # Only an article differs.
+        ("les amis de la montagne", "amis de la montagne", {"city": "quebec"}, "fuzzy", "generic"),
+        # A first name with an added ending is often another person, sharing a family phone.
+        (
+            "clinique denis cote",
+            "clinique denise cote",
+            {"phones": [PHONE]},
+            "fuzzy_name",
+            "ending",
+        ),
+        ("clinique denis cote", "clinique denise cote", {"city": "quebec"}, "fuzzy_name", "ending"),
+        (
+            "clinique denis cote",
+            "clinique denise cote",
+            {"emails": ["info@cote.ca"]},
+            "fuzzy",
+            "ending",
+        ),
+    ],
+)
+def test_a_difference_in_distinctive_words_needs_stronger_evidence(
+    left, right, fields, rule, difference
+):
+    # Arrange
+    records = [record(1, left, **fields), record(2, right, **fields)]
+    # Act
+    [match] = fm.fuzzy_matches(records, EXCLUDED, config=CONFIG).matches
+    # Assert
+    assert (match.rule, dict(match.fields)["name_difference"]) == (rule, difference)
+
+
+@pytest.mark.parametrize(
+    "left,right,difference",
+    [
+        ("boulangerie tremblay", "boulangeries tremblay", "generic"),
+        ("tremblay", "tremblays", "generic"),
+        ("martin tremblay", "tremblay martin", "order"),
+        ("paul roy", "paule roy", "ending"),
+        ("martin", "marin", "spelling"),
+    ],
+)
+def test_name_difference_kinds(left, right, difference):
+    # Arrange
+    ours, theirs = name_profile(left, CONFIG), name_profile(right, CONFIG)
+    # Act / Assert
+    assert fm.name_difference(ours, theirs) == difference
 
 
 def test_generic_names_in_one_city_do_not_match():
@@ -158,8 +263,22 @@ def test_match_keeps_its_score_and_evidence():
     [match] = fm.fuzzy_matches([right, left], EXCLUDED, config=CONFIG).matches
     # Assert
     assert match.score == 0.875
-    assert match.fields == (("name_similarity", "0.875"), ("city", "quebec"))
+    assert match.fields == (
+        ("name_similarity", "0.875"),
+        ("name_difference", "spelling"),
+        ("city", "quebec"),
+    )
     assert match.sides == (("name_normalized", "boulangerie tremblay", "boulangerie tremblai"),)
+
+
+def test_a_score_that_does_not_end_is_kept_whole_and_shown_rounded():
+    # Arrange
+    records = [record(1, "imprimerie belanger"), record(2, "imprimerie belager")]
+    # Act
+    [match] = fm.fuzzy_matches(records, EXCLUDED, config=CONFIG).matches
+    # Assert
+    assert match.score == pytest.approx(14 / 15)
+    assert dict(match.fields)["name_similarity"] == "0.933"
 
 
 def test_pairs_tier1_classified_or_with_equal_names_are_skipped():

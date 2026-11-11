@@ -20,7 +20,8 @@ def record(number, name, city="quebec", **fields):
                 "kind": "organization",
                 "external_id": f"org-{number}",
                 "external_ids": {},
-                "attributes": {"cities": [city]},
+                # The same phone, so a spelling difference may link.
+                "attributes": {"cities": [city], "identifiers": {"phones": ["+14185550001"]}},
                 "name_normalized": name,
                 "city": city,
             }

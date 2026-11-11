@@ -57,15 +57,55 @@ def similarity(left: str, right: str, config: FuzzyConfig) -> float:
     return score(name_profile(left, config), name_profile(right, config))
 
 
+# Which agreeing signals can confirm each kind of name difference. A shared city links
+# only names whose distinctive words are the same: one letter, word order or an added
+# ending in a distinctive word is often another business in the same city.
+CONFIRMED_BY = {
+    "generic": frozenset({"city", "phone", "email_domain"}),
+    "spelling": frozenset({"phone", "email_domain"}),
+    "order": frozenset({"phone", "email_domain"}),
+    # Denis and Denise Cote: relatives often share a business phone, not a domain.
+    "ending": frozenset({"email_domain"}),
+}
+
+
+def _stem(word: str) -> str:
+    """The word without a plural s or x."""
+    return word[:-1] if len(word) > 3 and word[-1] in "sx" else word
+
+
+def name_difference(left: Profile, right: Profile) -> str:
+    """How the distinctive words of two names differ.
+
+    generic: they are the same, so only generic words, plurals or articles differ.
+    order: the same words in another order. ending: a word with letters added at its
+    end (Denis, Denise). spelling: anything else.
+    """
+    ours = [_stem(word) for word in left.distinctive]
+    theirs = [_stem(word) for word in right.distinctive]
+    if ours == theirs:
+        return "generic"
+    if sorted(ours) == sorted(theirs):
+        return "order"
+    only_ours = [word for word in ours if word not in theirs]
+    only_theirs = [word for word in theirs if word not in ours]
+    if any(a.startswith(b) or b.startswith(a) for a in only_ours for b in only_theirs):
+        return "ending"
+    return "spelling"
+
+
 def decide(left: Profile, right: Profile, similar: float) -> MatchCandidateData:
-    """A link only with an agreeing signal and no conflict; otherwise a review."""
+    """A link needs an agreeing signal strong enough for the name difference, and no
+    conflict; otherwise the pair waits for review."""
     agreeing, conflicts = compare_signals(left.signals, right.signals)
-    rule = FUZZY_RULE if agreeing and not conflicts else FUZZY_NAME_RULE
+    difference = name_difference(left, right)
+    confirmed = any(field in CONFIRMED_BY[difference] for field, _ in agreeing)
+    rule = FUZZY_RULE if confirmed and not conflicts else FUZZY_NAME_RULE
     return MatchCandidateData(
         left=left.id,
         right=right.id,
         rule=rule,
-        fields=(("name_similarity", f"{similar:.3f}"), *agreeing),
+        fields=(("name_similarity", f"{similar:.3f}"), ("name_difference", difference), *agreeing),
         score=similar,
         sides=(("name_normalized", left.name, right.name), *conflicts),
     )
