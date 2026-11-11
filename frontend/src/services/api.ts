@@ -189,3 +189,68 @@ export function getRecordHistory(
     `/api/tenants/${tenantId}/records/${sourceId}/${encodeURIComponent(externalId)}`,
   );
 }
+
+export interface RecordRef {
+  source_id: string;
+  external_id: string;
+  version_id: string;
+  label: string;
+}
+
+export interface OrganizationSummary {
+  organization_id: string | null;
+  record: RecordRef | null;
+  name: string;
+  records: number;
+  last_changed: string;
+}
+
+export interface LinkedRecord {
+  record: RecordRef;
+  link: { method: string; confidence: number; decided_by: string };
+  versions: { id: string; label: string; domain: string | null; valid_from: string }[];
+}
+
+export interface Organization {
+  id: string;
+  display_name: string;
+  primary_domain: string | null;
+  records: LinkedRecord[];
+}
+
+export interface TimelineEntry {
+  sync_run_id: string;
+  started_at: string;
+  change_type: ChangeType;
+  record: RecordRef;
+  changed_fields: Record<string, FieldChange>;
+}
+
+export type OrganizationSort = "name" | "last_changed";
+
+export function getOrganizations(
+  tenantId: string,
+  sort: OrganizationSort,
+  page: number,
+): Promise<Page<OrganizationSummary>> {
+  const params = new URLSearchParams({
+    sort,
+    order: sort === "name" ? "asc" : "desc",
+    page: String(page),
+    page_size: "25",
+  });
+  return request<Page<OrganizationSummary>>(`/api/tenants/${tenantId}/organizations?${params}`);
+}
+
+export function getOrganization(tenantId: string, organizationId: string): Promise<Organization> {
+  return request<Organization>(`/api/tenants/${tenantId}/organizations/${organizationId}`);
+}
+
+export function getOrganizationTimeline(
+  tenantId: string,
+  organizationId: string,
+): Promise<TimelineEntry[]> {
+  return requestAll<TimelineEntry>(
+    `/api/tenants/${tenantId}/organizations/${organizationId}/timeline`,
+  );
+}
