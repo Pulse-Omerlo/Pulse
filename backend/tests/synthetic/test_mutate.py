@@ -5,12 +5,16 @@ from synthetic.fixture_loader import read_json
 from synthetic.mutate import (
     BACKUP_DIR,
     DEMO,
+    RECHECK_DOMAIN,
+    RECHECK_LINKEDIN,
+    RECHECK_RENAME,
     Add,
     Delete,
     Edit,
     MutationError,
     MutationSet,
     apply_set,
+    contact_values,
     load_with_ground_truth,
     main,
     mutate,
@@ -262,6 +266,66 @@ def test_value_changes_key_locale_lists_by_locale():
         {"field": "record.contact[en]", "before": None, "after": {"locale": "en", "phone": "2"}},
         {"field": "record.contact[fr].phone", "before": "1", "after": "2"},
     ]
+
+
+def test_linkedin_removed_clears_every_locale_and_stays_valid():
+    tenants = OmerloFixtureGenerator(SEED, SMALL).generate()
+    after, diff = mutate(
+        tenants, MutationSet("x", "", (Edit("organizations", ("linkedin_removed",)),))
+    )
+
+    for data in after:
+        for entry in diff["tenants"][data.tenant.slug]["modified"]:
+            record = by_id(data, "organizations")[entry["id"]]
+            assert contact_values(record, "linkedin") == set()
+            MODELS["organizations"].model_validate(record)
+            assert any(change["after"] is None for change in entry["changes"])
+    assert sum(len(t["modified"]) for t in diff["tenants"].values()) == len(after)
+
+
+def test_paired_edit_only_touches_duplicate_pairs():
+    tenants = OmerloFixtureGenerator(SEED, SMALL).generate()
+    paired = {
+        record_id
+        for data in tenants
+        for pair in data.ground_truth["organization_duplicates"]
+        for record_id in pair["record_ids"]
+    }
+
+    after, diff = mutate(tenants, RECHECK_DOMAIN)
+
+    for data in after:
+        for entry in diff["tenants"][data.tenant.slug]["modified"]:
+            assert entry["id"] in paired
+            assert entry["kind"] == "organizations"
+
+
+@pytest.mark.parametrize("mutation_set", [RECHECK_DOMAIN, RECHECK_LINKEDIN, RECHECK_RENAME])
+def test_recheck_sets_are_deterministic_and_schema_valid(mutation_set):
+    first_before = OmerloFixtureGenerator(SEED, SMALL).generate()
+    second_before = OmerloFixtureGenerator(SEED, SMALL).generate()
+
+    first_after, first_diff = mutate(first_before, mutation_set)
+    second_after, second_diff = mutate(second_before, mutation_set)
+
+    assert first_diff == second_diff
+    assert [tenant.resources for tenant in first_after] == [
+        tenant.resources for tenant in second_after
+    ]
+    for data in first_after:
+        for record in data.resources["organizations"]:
+            MODELS["organizations"].model_validate(record)
+    assert sum(len(t["modified"]) for t in first_diff["tenants"].values()) >= 1
+
+
+def test_demo_set_is_unchanged_by_paired_flag():
+    first = OmerloFixtureGenerator(SEED, SMALL).generate()
+    second = OmerloFixtureGenerator(SEED, SMALL).generate()
+
+    _, first_diff = mutate(first, DEMO)
+    _, second_diff = mutate(second, DEMO)
+
+    assert first_diff == second_diff
 
 
 # ------------------------------------------------------------- files, reset
