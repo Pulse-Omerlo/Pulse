@@ -1,20 +1,23 @@
 # AI contribution: Below 50% AI-generated
 import tomllib
 from collections import defaultdict
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from functools import cache
 from itertools import combinations
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import case, select, update
+from sqlalchemy.orm import Session, aliased
 
 from app.core.logging import get_logger
 from app.core.tenancy import bound_to_tenant
 from app.models import MatchCandidate, Organization, OrgLink, SourceRecord, Tenant
 from app.models.resolution import RuleEvidence
+
+# The LinkedIn prefix stays importable from here for existing callers.
+from app.processing.clustering import LINKEDIN_COMPANY_PREFIX as LINKEDIN_COMPANY_PREFIX
 from app.processing.clustering import (
     Cluster,
     LinkFacts,
@@ -242,6 +245,8 @@ class _Run:
     links: dict[UUID, OrgLink]
     decisions: dict[Pair, MatchCandidate]
     organizations: dict[UUID, Organization]
+    # Organization merged in this run -> the one it was merged into.
+    merges: dict[UUID, UUID] = field(default_factory=dict)
     result: MatchResult = field(default_factory=MatchResult)
 
 
@@ -273,14 +278,29 @@ def _current_links(session: Session, tenant_id: UUID) -> dict[UUID, OrgLink]:
     return {link.source_record_id: link for link in session.scalars(query)}
 
 
-def _decisions(
-    session: Session, tenant_id: UUID, records: Mapping[UUID, SourceRecord]
-) -> dict[Pair, MatchCandidate]:
-    query = select(MatchCandidate).where(MatchCandidate.tenant_id == tenant_id)
+def _decisions(session: Session, tenant_id: UUID) -> dict[Pair, MatchCandidate]:
+    """Candidates between two current organization records; older versions are skipped."""
+    left, right = aliased(SourceRecord), aliased(SourceRecord)
+    query = (
+        select(MatchCandidate)
+        .join(left, left.id == MatchCandidate.left_record_id)
+        .join(right, right.id == MatchCandidate.right_record_id)
+        .where(
+            MatchCandidate.tenant_id == tenant_id,
+            *(
+                condition
+                for record in (left, right)
+                for condition in (
+                    record.tenant_id == tenant_id,
+                    record.kind == "organization",
+                    record.valid_to.is_(None),
+                )
+            ),
+        )
+    )
     return {
         (candidate.left_record_id, candidate.right_record_id): candidate
         for candidate in session.scalars(query)
-        if candidate.left_record_id in records and candidate.right_record_id in records
     }
 
 
@@ -353,14 +373,27 @@ def _new_organization(run: _Run, cluster: Cluster) -> Organization:
 
 
 def _merge(run: _Run, merged_id: UUID, survivor_id: UUID) -> None:
-    """Point the organization, and any merged into it earlier, at the survivor."""
-    earlier = select(Organization).where(
-        Organization.tenant_id == run.tenant_id, Organization.merged_into == merged_id
-    )
-    for organization in run.session.scalars(earlier):
-        organization.merged_into = survivor_id
     run.organizations[merged_id].merged_into = survivor_id
+    run.merges[merged_id] = survivor_id
     run.result.organizations_merged += 1
+
+
+def _repoint_earlier_merges(run: _Run) -> None:
+    """Point organizations merged earlier into one merged in this run at its survivor.
+
+    One statement for the whole run, so merged_into stays one hop.
+    """
+    if not run.merges:
+        return
+    run.session.execute(
+        update(Organization)
+        .where(
+            Organization.tenant_id == run.tenant_id,
+            Organization.merged_into.in_(sorted(run.merges)),
+        )
+        .values(merged_into=case(run.merges, value=Organization.merged_into))
+        .execution_options(synchronize_session="fetch")
+    )
 
 
 def _add_link(run: _Run, new_link: NewLink, organization_id: UUID, tentative: bool) -> None:
@@ -398,9 +431,18 @@ def _apply(run: _Run, cluster: Cluster) -> None:
         organization.primary_domain = cluster.primary_domain
 
 
+def has_changed_record(record_ids: Iterable[UUID], changed_ids: set[UUID] | None) -> bool:
+    """Whether one of the records changed; with no changed_ids every record counts."""
+    return changed_ids is None or not changed_ids.isdisjoint(record_ids)
+
+
 # Loads a tenant's current organization records and past decisions, plans the clusters, then
 # creates or merges organizations, links and review candidates in the caller's transaction.
-def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
+# With changed_ids, only clusters and pairs holding one of those records are applied; the other
+# current records are still loaded so the changed ones can be compared to them.
+def match_organizations(
+    session: Session, tenant_id: UUID, changed_ids: set[UUID] | None = None
+) -> MatchResult:
     with bound_to_tenant(session, tenant_id):
         # Serialize matcher invocations for this tenant.
         tenant = session.scalar(select(Tenant).where(Tenant.id == tenant_id).with_for_update())
@@ -414,7 +456,7 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
             session=session,
             tenant_id=tenant_id,
             links=links,
-            decisions=_decisions(session, tenant_id, records),
+            decisions=_decisions(session, tenant_id),
             organizations=_organizations(
                 session, tenant_id, {link.organization_id for link in links.values()}
             ),
@@ -434,12 +476,15 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
             _manual_organizations(session, tenant_id),
         )
         for cluster in plan.clusters:
-            _apply(run, cluster)
+            if has_changed_record(cluster.members, changed_ids):
+                _apply(run, cluster)
+        _repoint_earlier_merges(run)
         for match in plan.candidates:
-            _add_candidate(run, match)
+            if has_changed_record(match.providePair, changed_ids):
+                _add_candidate(run, match)
 
         for match in matches:
-            if match.strong:
+            if match.strong or not has_changed_record(match.providePair, changed_ids):
                 continue
             left, right = run.links.get(match.left), run.links.get(match.right)
             if left and right and left.organization_id == right.organization_id:

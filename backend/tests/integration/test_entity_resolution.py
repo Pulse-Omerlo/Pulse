@@ -349,6 +349,18 @@ def test_chain_merges_organizations_and_old_ids_still_resolve(session):
     assert {surviving_organization_id(session, tenant.id, i) for i in ids} == {large.id}
 
 
+def test_a_chain_merges_only_when_one_of_its_records_changed(session):
+    # Arrange
+    tenant, _, _, records, small, large, _ = chained_organizations(session)
+    # Act
+    unchanged = match_organizations(session, tenant.id, changed_ids=set())
+    changed = match_organizations(session, tenant.id, changed_ids={records[4].id})
+    # Assert
+    assert unchanged == MatchResult()
+    assert changed == MatchResult(0, 2, 0, 1)
+    assert small.merged_into == large.id
+
+
 def test_merge_leaves_closed_versions_on_the_old_organization(session):
     # Arrange
     tenant, run, mapped, records, small, large, _ = chained_organizations(session)

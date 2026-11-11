@@ -270,19 +270,24 @@ class Groups:
 
     def blocked(self, edge: MatchCandidateData, first: UUID, second: UUID) -> bool:
         """Whether joining the groups rooted at first and second through edge breaks a rule."""
-        a, b = self._groups[first], self._groups[second]
-        smaller, other_root = (a, second) if len(a.rejected) <= len(b.rejected) else (b, first)
+        first_group, second_group = self._groups[first], self._groups[second]
+        if len(first_group.rejected) <= len(second_group.rejected):
+            smaller, other_root = first_group, second
+        else:
+            smaller, other_root = second_group, first
         if any(self.root(record_id) == other_root for record_id in smaller.rejected):
             return True
-        merges = bool(a.organizations and b.organizations)
-        if merges and (not can_merge_organizations(edge) or a.manual or b.manual):
+        merges = bool(first_group.organizations and second_group.organizations)
+        if merges and (
+            not can_merge_organizations(edge) or first_group.manual or second_group.manual
+        ):
             return True
         # A record placed by a fuzzy match is not trusted to merge two organizations.
         if merges and any(self.tentative(record_id) for record_id in edge.providePair):
             return True
         if edge.rule not in TIER1_RULES and self._fuzzy_blocked(edge, first, second):
             return True
-        return a.identifiers.disagrees(b.identifiers)
+        return first_group.identifiers.disagrees(second_group.identifiers)
 
     def tie_cuts(self, tier: Sequence[MatchCandidateData]) -> set[MatchCandidateData]:
         """Edges of one strength from a record into groups that could not join each other.

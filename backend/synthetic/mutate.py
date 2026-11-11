@@ -61,11 +61,15 @@ class Add:
 
 @dataclass(frozen=True)
 class Edit:
-    """Change `fields` on `count` records; see EDITS for the fields of each kind."""
+    """Change `fields` on `count` records; see EDITS for the fields of each kind.
+
+    When `paired` is true, only records in a ground-truth duplicate pair are eligible.
+    """
 
     kind: str
     fields: tuple[str, ...]
     count: int = 1
+    paired: bool = False
 
 
 @dataclass(frozen=True)
@@ -111,7 +115,28 @@ DEMO = MutationSet(
     ),
 )
 
-MUTATION_SETS = {s.name: s for s in (DEMO,)}
+RECHECK_DOMAIN = MutationSet(
+    name="recheck_domain",
+    description="Change the domain of one paired organization for link recheck tests.",
+    steps=(Edit("organizations", ("domain",), paired=True),),
+    seed=110,
+)
+
+RECHECK_LINKEDIN = MutationSet(
+    name="recheck_linkedin",
+    description="Remove LinkedIn from one paired organization for link recheck tests.",
+    steps=(Edit("organizations", ("linkedin_removed",), paired=True),),
+    seed=111,
+)
+
+RECHECK_RENAME = MutationSet(
+    name="recheck_rename",
+    description="Rename one paired organization for link recheck tests.",
+    steps=(Edit("organizations", ("name",), paired=True),),
+    seed=112,
+)
+
+MUTATION_SETS = {s.name: s for s in (DEMO, RECHECK_DOMAIN, RECHECK_LINKEDIN, RECHECK_RENAME)}
 
 
 # -------------------------------------------------------------------- helpers
@@ -265,7 +290,14 @@ class TenantMutator:
         if unknown:
             raise MutationError(f"cannot edit {step.kind} {', '.join(unknown)}")
         needs = [editors[f][0] for f in step.fields]
-        for record in self.pick(step.kind, step.count, lambda r: all(n(self, r) for n in needs)):
+        paired_ids = self.paired() if step.paired else None
+
+        def eligible(record: dict[str, Any]) -> bool:
+            if paired_ids is not None and record["id"] not in paired_ids:
+                return False
+            return all(need(self, record) for need in needs)
+
+        for record in self.pick(step.kind, step.count, eligible):
             for name in step.fields:
                 editors[name][1](self, record)
             record["updated_at"] = self.shared.clock.next()
@@ -295,6 +327,10 @@ class TenantMutator:
 
     def change_org_linkedin(self, record: dict[str, Any]) -> None:
         self.set_linkedin(record, "company", slugify(base_name(record["name"])))
+
+    def remove_org_linkedin(self, record: dict[str, Any]) -> None:
+        for contact in record["contact"]:
+            contact["linkedin"] = None
 
     def change_crm_id(self, record: dict[str, Any]) -> None:
         used = {e["value"] for entries in self.data.metadata.values() for e in entries}
@@ -382,6 +418,7 @@ EDITS: dict[str, dict[str, tuple[Callable, Callable]]] = {
         "name": (always, TenantMutator.rename_organization),
         "domain": (has_website, TenantMutator.move_domain),
         "linkedin": (has_contact("linkedin"), TenantMutator.change_org_linkedin),
+        "linkedin_removed": (has_contact("linkedin"), TenantMutator.remove_org_linkedin),
         "crm_id": (lambda m, r: bool(m.crm_id(r)), TenantMutator.change_crm_id),
         "phone": (has_contact("phone"), TenantMutator.change_phone),
     },

@@ -15,6 +15,8 @@ from app.processing.fuzzy_profile import signals
 from app.processing.match_rules import TIER1_RULES, MatchCandidateData, Pair, strength_key
 from app.processing.organization_values import choose_display_values
 
+LINKEDIN_COMPANY_PREFIX = "company/"
+
 
 @dataclass(frozen=True)
 class Member:
@@ -99,7 +101,7 @@ def external_keys(record: SourceRecord) -> set[tuple[str, str]]:
 
 def company_linkedin(record: SourceRecord) -> str | None:
     """The record's company LinkedIn URL; a person's profile cannot identify an organization."""
-    if record.linkedin and record.linkedin.startswith("company/"):
+    if record.linkedin and record.linkedin.startswith(LINKEDIN_COMPANY_PREFIX):
         return record.linkedin
     return None
 
