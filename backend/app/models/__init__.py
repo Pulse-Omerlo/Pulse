@@ -5,6 +5,7 @@ from app.models.changes import RecordChange
 from app.models.industry import IndustryClassification
 from app.models.records import RawRecord, SourceRecord
 from app.models.resolution import MatchCandidate, Organization, OrgLink
+from app.models.sector_mix import SectorMixResult
 from app.models.tenancy import Source, SyncRun, Tenant
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     "Organization",
     "RawRecord",
     "RecordChange",
+    "SectorMixResult",
     "Source",
     "SourceRecord",
     "SyncRun",

@@ -32,7 +32,7 @@ def covers(index_columns: list[str], unique: bool, fk_columns: list[str]) -> boo
     return leading == set(fk_columns) or (unique and set(index_columns) <= set(fk_columns))
 
 
-def test_the_data_model_has_its_ten_tables():
+def test_the_data_model_has_its_eleven_tables():
     assert set(TABLES) == {
         "tenant",
         "source",
@@ -44,6 +44,7 @@ def test_the_data_model_has_its_ten_tables():
         "match_candidate",
         "record_change",
         "industry_classification",
+        "sector_mix",
     }
 
 
