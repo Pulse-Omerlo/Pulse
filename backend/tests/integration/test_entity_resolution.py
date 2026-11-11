@@ -10,6 +10,7 @@ from sqlalchemy import select
 from app.ingestion.mapped import MappedRecord
 from app.models import MatchCandidate, Organization, OrgLink, Source, SourceRecord, SyncRun, Tenant
 from app.processing.entity_resolution import MatchResult, match_organizations
+from app.processing.normalization import normalize_organization_name
 from app.services.organizations import current_records, surviving_organization_id
 from app.services.source_records import close_unseen, upsert_records
 
@@ -303,14 +304,22 @@ def test_caller_can_roll_back_all_matching_writes(session):
     assert session.scalar(select(Organization).where(Organization.tenant_id == tenant.id)) is None
 
 
+def named(name):
+    return {"name_normalized": normalize_organization_name(name)}
+
+
 def chained_organizations(session):
     """Record 0 in one organization, 1 and 2 in another; 3 and 4 chain them together."""
     tenant, run, mapped, records = setup_records(
         session,
         [
-            {"domain": "exemple.ca", "attributes": {"name": "Exemple"}},
-            {"linkedin": "company/exemple", "attributes": {"name": "Exemple Inc."}},
-            {"linkedin": "company/exemple", "attributes": {"name": "Exemple"}},
+            {"domain": "exemple.ca", "attributes": {"name": "Exemple"}, **named("Exemple")},
+            {
+                "linkedin": "company/exemple",
+                "attributes": {"name": "Exemple Inc."},
+                **named("Exemple Inc."),
+            },
+            {"linkedin": "company/exemple", "attributes": {"name": "Exemple"}, **named("Exemple")},
             {"domain": "exemple.ca"},
             {"domain": "exemple.ca", "linkedin": "company/exemple"},
         ],
