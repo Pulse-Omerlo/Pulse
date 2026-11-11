@@ -56,7 +56,6 @@ backend/tests/ingestion/omerlo/mapping/test_mappers.py
 backend/tests/integration/conftest.py
 backend/tests/integration/test_migrations.py
 backend/tests/integration/test_seed.py
-backend/tests/models/test_schema.py
 backend/tests/test_seed.py
 
 # mijanullah12
