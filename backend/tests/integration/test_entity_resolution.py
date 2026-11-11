@@ -408,3 +408,60 @@ def test_merged_ids_do_not_resolve_from_another_tenant(session):
     assert surviving_organization_id(session, other.id, small.id) is None
     assert surviving_organization_id(session, tenant.id, small.id) == large.id
     assert current_records(session, other.id, large.id) == []
+
+
+def test_manual_organization_with_two_domains_still_gains_a_matching_record(session):
+    # Arrange: a reviewer put old.ca and new.ca in one organization.
+    tenant, _, _, records = setup_records(
+        session, [{"domain": "old.ca"}, {"domain": "new.ca"}, {"domain": "new.ca"}]
+    )
+    first = manual_link(session, records[0])
+    session.add(
+        OrgLink(
+            tenant_id=tenant.id,
+            source_record_id=records[1].id,
+            organization_id=first.organization_id,
+            method="manual",
+            confidence=1,
+            decided_by="reviewer",
+            evidence=[{"decided_by": "reviewer"}],
+        )
+    )
+    session.flush()
+    # Act
+    result = match_organizations(session, tenant.id)
+    # Assert
+    assert result == MatchResult(0, 1, 0)
+    assert session.get(OrgLink, records[2].id).organization_id == first.organization_id
+
+
+def test_member_whose_domain_changed_still_brings_in_records_on_the_new_domain(session):
+    # Arrange
+    tenant, run, mapped, records = setup_records(
+        session, [{"domain": "exemple.ca"}, {"domain": "exemple.ca"}]
+    )
+    match_organizations(session, tenant.id)
+    organization_id = session.get(OrgLink, records[0].id).organization_id
+    next_run = SyncRun(
+        tenant_id=tenant.id, source_id=run.source_id, started_at=START + timedelta(days=1)
+    )
+    session.add(next_run)
+    session.flush()
+    newcomer = MappedRecord(
+        kind="organization",
+        external_id="9",
+        workspace_id=None,
+        name_normalized="org 9",
+        domain="nouveau.ca",
+    )
+    upsert_records(session, next_run, [replace(mapped[1], domain="nouveau.ca"), newcomer])
+    # Act
+    result = match_organizations(session, tenant.id)
+    added = session.scalar(
+        select(SourceRecord).where(
+            SourceRecord.tenant_id == tenant.id, SourceRecord.external_id == "9"
+        )
+    )
+    # Assert
+    assert result == MatchResult(0, 1, 0)
+    assert session.get(OrgLink, added.id).organization_id == organization_id

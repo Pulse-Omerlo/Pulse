@@ -10,10 +10,10 @@ from app.models import SourceRecord
 from app.processing import clustering
 from app.processing.clustering import (
     DisjointSet,
+    Identifiers,
     LinkFacts,
     Member,
     choose_survivor,
-    conflicting,
     member_from_record,
     plan_clusters,
 )
@@ -31,6 +31,59 @@ def members(*items):
     return {item.id: item for item in items}
 
 
+def test_organization_that_already_disagrees_can_still_gain_a_record():
+    # Arrange: a reviewer put old.ca and new.ca in one organization.
+    items = members(
+        Member(A, domain="old.ca"), Member(B, domain="new.ca"), Member(C, domain="new.ca")
+    )
+    links = {A: LinkFacts(ORG_1, manual=True), B: LinkFacts(ORG_1, manual=True)}
+    # Act
+    plan = plan_clusters(items, [edge(B, C, "domain")], links)
+    # Assert
+    assert plan.candidates == ()
+    assert [link.record_id for link in plan.clusters[0].new_links] == [C]
+
+
+def test_join_that_adds_a_new_disagreement_is_still_cut():
+    # Arrange
+    items = members(
+        Member(A, domain="old.ca"),
+        Member(B, domain="new.ca", linkedin="company/exemple"),
+        Member(C, domain="other.ca", linkedin="company/exemple"),
+    )
+    links = {A: LinkFacts(ORG_1), B: LinkFacts(ORG_1)}
+    # Act
+    plan = plan_clusters(items, [edge(B, C, "linkedin")], links)
+    # Assert
+    assert [e.rule for e in plan.candidates] == ["linkedin"]
+
+
+def test_external_ids_disagree_per_namespace():
+    # Arrange: crm ids are shared, neq ids are not.
+    first = Member(A, external_ids=frozenset({("crm", "1"), ("neq", "10")}))
+    second = Member(B, external_ids=frozenset({("crm", "1"), ("neq", "20")}))
+    third = Member(C, external_ids=frozenset({("crm", "1"), ("other", "20")}))
+    # Act / Assert
+    assert Identifiers.of(first).disagrees(Identifiers.of(second))
+    assert not Identifiers.of(first).disagrees(Identifiers.of(third))
+
+
+def test_large_shared_domain_block_is_planned_without_mixing_linkedin_pages():
+    # Arrange: 600 records on one domain, half on each of two LinkedIn pages.
+    ids = [UUID(int=1000 + n) for n in range(600)]
+    items = members(
+        *(Member(i, domain="groupe.ca", linkedin=f"company/{n % 2}") for n, i in enumerate(ids))
+    )
+    edges = [edge(x, y, "domain") for n, x in enumerate(ids) for y in ids[n + 1 :]]
+    # Act
+    plan = plan_clusters(items, edges, {})
+    # Assert
+    for cluster in plan.clusters:
+        assert len({items[r].linkedin for r in cluster.members}) == 1
+    kept = len(edges) - len(plan.candidates)
+    assert kept >= sum(len(c.members) - 1 for c in plan.clusters)
+
+
 def test_union_find_keeps_the_smallest_id_as_root():
     # Arrange
     sets = DisjointSet([A, B, C, D])
@@ -39,23 +92,8 @@ def test_union_find_keeps_the_smallest_id_as_root():
     sets.union(C, B)
     # Assert
     assert sets.find(D) == B
-    assert sets.members(C) == {B, C, D}
+    assert sets.members(C) == frozenset({B, C, D})
     assert sets.groups() == [frozenset({A}), frozenset({B, C, D})]
-
-
-def test_components_follow_strong_paths_and_ignore_weak_bridges():
-    # Arrange
-    edges = [
-        edge(A, B, "domain"),
-        edge(B, C, "linkedin"),
-        edge(A, C, "external_id"),
-        edge(C, D, "name_only"),
-        edge(D, E, "domain"),
-    ]
-    # Act
-    groups = clustering.components(edges)
-    # Assert
-    assert groups == [{A, B, C}, {D, E}]
 
 
 def test_three_record_chain_becomes_one_new_cluster():
@@ -255,9 +293,11 @@ def test_edges_to_unknown_records_are_ignored():
         (Member(A, domain="exemple.ca"), Member(B), False),
     ],
 )
-def test_conflicting_identifiers(first, second, conflict):
-    # Act / Assert
-    assert conflicting([first, second]) is conflict
+def test_identifiers_disagree_only_with_no_shared_value(first, second, conflict):
+    # Act
+    result = Identifiers.of(first).disagrees(Identifiers.of(second))
+    # Assert
+    assert result is conflict
 
 
 def test_member_drops_generic_domains_and_person_profiles():

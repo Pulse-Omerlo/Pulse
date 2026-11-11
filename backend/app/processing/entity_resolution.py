@@ -18,8 +18,10 @@ from app.processing.clustering import (
     Cluster,
     LinkFacts,
     NewLink,
+    company_linkedin,
     external_keys,
     member_from_record,
+    organization_domain,
     plan_clusters,
 )
 from app.processing.match_rules import (
@@ -93,13 +95,12 @@ def blocking_keys(
     record: SourceRecord,
     excluded_domains: frozenset[str],
 ) -> Iterable[Key]:
-    # A domain is a strong identifier for an organization, but generic domains are not useful for
-    # matching.
-    if record.domain and record.domain not in excluded_domains:
-        yield "domain", record.domain
-    # A person's LinkedIn profile cannot identify an organization.
-    if record.linkedin and record.linkedin.startswith("company/"):
-        yield "linkedin", record.linkedin
+    domain = organization_domain(record, excluded_domains)
+    if domain:
+        yield "domain", domain
+    linkedin = company_linkedin(record)
+    if linkedin:
+        yield "linkedin", linkedin
     for namespace, value in sorted(external_keys(record)):
         yield "external_id", namespace, value
     if record.name_normalized:
@@ -127,16 +128,14 @@ def classify_pair(
     ):
         return None
     left, right = sorted((left, right), key=lambda record: record.id)
-    if (
-        # Match domain
-        left.domain and left.domain == right.domain and left.domain not in excluded_domains
-    ):
-        return MatchCandidateData(left.id, right.id, "domain", (("domain", left.domain),))
-    if (
-        # Match LinkedIn profile
-        left.linkedin and left.linkedin.startswith("company/") and left.linkedin == right.linkedin
-    ):
-        return MatchCandidateData(left.id, right.id, "linkedin", (("linkedin", left.linkedin),))
+    # Match domain
+    domain = organization_domain(left, excluded_domains)
+    if domain and domain == right.domain:
+        return MatchCandidateData(left.id, right.id, "domain", (("domain", domain),))
+    # Match company LinkedIn page
+    linkedin = company_linkedin(left)
+    if linkedin and linkedin == right.linkedin:
+        return MatchCandidateData(left.id, right.id, "linkedin", (("linkedin", linkedin),))
     # Match external identifiers using set intersection to find shared identifiers
     shared_ids = external_keys(left) & external_keys(right)
     if shared_ids:
