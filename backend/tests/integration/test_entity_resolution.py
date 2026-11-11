@@ -629,3 +629,22 @@ def test_old_organization_id_lists_the_survivors_records(session):
     # Assert
     assert by_old_id == current_records(session, tenant.id, large.id)
     assert {record.id for record in by_old_id} == {record.id for record in records}
+
+
+def test_link_to_a_merged_organization_reaches_a_survivor_with_no_current_links(session):
+    # Arrange
+    tenant, _, _, records = setup_records(session, [{"domain": "exemple.ca"}])
+    survivor = Organization(tenant_id=tenant.id, display_name="Survivor")
+    session.add(survivor)
+    session.flush()
+    merged = Organization(tenant_id=tenant.id, display_name="Merged", merged_into=survivor.id)
+    session.add(merged)
+    session.flush()
+    rule_link(session, records, merged)
+    # Act
+    result = match_organizations(session, tenant.id)
+    session.expire_all()
+    # Assert
+    assert result == MatchResult()
+    assert session.get(OrgLink, records[0].id).organization_id == survivor.id
+    assert session.get(Organization, survivor.id).primary_domain == "exemple.ca"
