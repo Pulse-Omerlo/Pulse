@@ -492,9 +492,7 @@ def match_organizations(
                     queue.append(neighbor)
 
         for match in matches:
-            if match.strong:
-                continue
-            if not has_changed_record([match.left, match.right], changed_ids):
+            if match.strong or not has_changed_record([match.left, match.right], changed_ids):
                 continue
             left, right = links.get(match.left), links.get(match.right)
             if left and right and left.organization_id == right.organization_id:
