@@ -5,13 +5,13 @@ import uuid
 from collections import defaultdict
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
 from app.models import RecordChange, SourceRecord, SyncRun, Tenant
+from app.services.pagination import FIRST_PAGE, Paging
 
-RUN_LIMIT = 50
 SEARCH_LIMIT = 50
 
 
@@ -41,24 +41,51 @@ def get_tenant(session: Session, tenant_id: uuid.UUID) -> Tenant:
     return tenant
 
 
-def list_runs(session: Session, tenant_id: uuid.UUID, limit: int = RUN_LIMIT) -> list[SyncRun]:
+def list_runs(
+    session: Session, tenant_id: uuid.UUID, paging: Paging = FIRST_PAGE
+) -> tuple[list[SyncRun], int]:
+    """One page of the tenant's runs, newest first, and their total."""
     statement = (
         select(SyncRun)
         .where(SyncRun.tenant_id == tenant_id)
-        .order_by(SyncRun.started_at.desc())
-        .limit(limit)
+        .order_by(SyncRun.started_at.desc(), SyncRun.id)
+        .limit(paging.page_size)
+        .offset(paging.offset)
     )
-    return list(session.scalars(statement))
+    total = session.scalar(select(func.count(SyncRun.id)).where(SyncRun.tenant_id == tenant_id))
+    return list(session.scalars(statement)), total or 0
+
+
+def label_sql() -> ColumnElement[str]:
+    """The SQL form of label(), to sort by it in the database."""
+    attributes = SourceRecord.attributes
+    full_name = func.concat_ws(" ", attributes["first_name"].astext, attributes["last_name"].astext)
+    return func.coalesce(
+        func.nullif(attributes["name"].astext, ""),
+        func.nullif(full_name, ""),
+        attributes["locales"][0]["name"].astext,
+        SourceRecord.name_normalized,
+        SourceRecord.external_id,
+    )
 
 
 def run_changes(
-    session: Session, tenant_id: uuid.UUID, run_id: uuid.UUID
-) -> list[tuple[RecordChange, SourceRecord]]:
+    session: Session,
+    tenant_id: uuid.UUID,
+    run_id: uuid.UUID,
+    paging: Paging = FIRST_PAGE,
+    *,
+    change_type: str | None = None,
+) -> tuple[list[tuple[RecordChange, SourceRecord]], int]:
+    """One page of a run's changes by type, kind and label, and their total."""
     run = session.scalar(
         select(SyncRun).where(SyncRun.tenant_id == tenant_id, SyncRun.id == run_id)
     )
     if run is None:
         raise NotFoundError("Sync run not found")
+    where = [RecordChange.tenant_id == tenant_id, RecordChange.sync_run_id == run_id]
+    if change_type:
+        where.append(RecordChange.change_type == change_type)
     statement = (
         select(RecordChange, SourceRecord)
         .join(
@@ -66,10 +93,19 @@ def run_changes(
             (SourceRecord.tenant_id == RecordChange.tenant_id)
             & (SourceRecord.id == RecordChange.source_record_id),
         )
-        .where(RecordChange.tenant_id == tenant_id, RecordChange.sync_run_id == run_id)
+        .where(*where)
+        .order_by(
+            RecordChange.change_type,
+            SourceRecord.kind,
+            func.lower(label_sql()),
+            RecordChange.id,
+        )
+        .limit(paging.page_size)
+        .offset(paging.offset)
     )
     rows = [(change, record) for change, record in session.execute(statement)]
-    return sorted(rows, key=lambda row: (row[0].change_type, row[1].kind, label(row[1]).lower()))
+    total = session.scalar(select(func.count(RecordChange.id)).where(*where))
+    return rows, total or 0
 
 
 def search_records(

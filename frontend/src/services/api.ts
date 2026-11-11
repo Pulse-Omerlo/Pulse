@@ -142,12 +142,37 @@ export function getTenants(): Promise<Tenant[]> {
   return request<Tenant[]>("/api/tenants");
 }
 
-export function getRuns(tenantId: string): Promise<SyncRun[]> {
-  return request<SyncRun[]>(`/api/tenants/${tenantId}/runs`);
+export interface Page<T> {
+  items: T[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+// The largest page the API serves.
+const MAX_PAGE_SIZE = 100;
+
+// Every item of a paged list, read page by page.
+async function requestAll<T>(path: string): Promise<T[]> {
+  const items: T[] = [];
+  for (let page = 1; ; page++) {
+    const params = new URLSearchParams({ page: String(page), page_size: String(MAX_PAGE_SIZE) });
+    const result = await request<Page<T>>(`${path}?${params}`);
+    items.push(...result.items);
+    if (result.items.length === 0 || items.length >= result.total) {
+      return items;
+    }
+  }
+}
+
+export async function getRuns(tenantId: string): Promise<SyncRun[]> {
+  const params = new URLSearchParams({ page_size: "50" });
+  const page = await request<Page<SyncRun>>(`/api/tenants/${tenantId}/runs?${params}`);
+  return page.items;
 }
 
 export function getRunChanges(tenantId: string, runId: string): Promise<RecordChange[]> {
-  return request<RecordChange[]>(`/api/tenants/${tenantId}/runs/${runId}/changes`);
+  return requestAll<RecordChange>(`/api/tenants/${tenantId}/runs/${runId}/changes`);
 }
 
 export function searchRecords(tenantId: string, query: string): Promise<RecordSummary[]> {
