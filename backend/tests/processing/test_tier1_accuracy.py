@@ -34,9 +34,23 @@ def test_expected_pairs_come_from_organization_duplicates():
     assert pairs == {("a", "b"), ("c", "d")}
 
 
+def test_expected_pairs_can_read_person_duplicates():
+    # Arrange
+    ground_truth = {
+        "organization_duplicates": [
+            {"entity": 1, "record_ids": ["a", "b"], "changes": []},
+        ],
+        "person_duplicates": [{"person": 5, "record_ids": ["p2", "p1"], "changes": []}],
+    }
+
+    # Act / Assert
+    assert expected_pairs(ground_truth, key="person_duplicates") == {("p1", "p2")}
+
+
 def test_expected_pairs_is_empty_without_duplicates():
     # Act / Assert
     assert expected_pairs({}) == set()
+    assert expected_pairs({}, key="person_duplicates") == set()
 
 
 def test_predicted_pairs_lists_every_pair_in_a_group():
@@ -110,8 +124,15 @@ def test_report_logs_the_dev_only_notice_and_each_tenant(capsys):
     # Assert
     assert events[0]["event"] == "tier1_report_started"
     assert events[0]["notice"] == tier1_report.HEADER
-    tenants = [event["tenant"] for event in events if event["event"] == "tier1_score"]
-    assert tenants == ["demo-capitale", "demo-estrie", "all"]
+    scores = [event for event in events if event["event"] == "tier1_score"]
+    assert [(event["tenant"], event["kind"]) for event in scores] == [
+        ("demo-capitale", "organization"),
+        ("demo-capitale", "person"),
+        ("demo-estrie", "organization"),
+        ("demo-estrie", "person"),
+        ("all", "organization"),
+        ("all", "person"),
+    ]
 
 
 def test_report_logs_each_wrong_pair_as_a_warning(capsys):

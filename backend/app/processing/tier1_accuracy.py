@@ -11,10 +11,14 @@ def make_pair(first_id, second_id):
     return (second_id, first_id)
 
 
-def expected_pairs(ground_truth):
-    """Duplicate pairs listed in one tenant's ground truth."""
+ORGANIZATION_DUPLICATES = "organization_duplicates"
+PERSON_DUPLICATES = "person_duplicates"
+
+
+def expected_pairs(ground_truth, *, key=ORGANIZATION_DUPLICATES):
+    """Duplicate pairs listed in one tenant's ground truth for one entity kind."""
     pairs = set()
-    for duplicate in ground_truth.get("organization_duplicates", []):
+    for duplicate in ground_truth.get(key, []):
         first_id, second_id = duplicate["record_ids"]
         pairs.add(make_pair(first_id, second_id))
     return pairs
