@@ -152,7 +152,9 @@ def record_sources(items: list[dict]) -> set[str]:
     refs = []
     for item in items:
         refs += [item[k] for k in ("record", "left", "right") if item.get(k)]
-        refs += [r["record"] for r in item.get("records") or [] if isinstance(r, dict)]
+        # A group lists its records; a list item only counts them.
+        if isinstance(item.get("records"), list):
+            refs += [linked["record"] for linked in item["records"]]
     return {ref["source_id"] for ref in refs}
 
 
