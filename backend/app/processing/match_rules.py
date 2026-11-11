@@ -4,18 +4,13 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-# Naming the version of the matching rules used to make a decision
-# If we need to change matching behavior later, we can create a new version and keep the old one for
-# reference
+# Version of the rules, stored with each decision.
 RULE_VERSION = "tier1-v1"
 
-# Priority of strong matching rules (Left = Highest priotity, Right = Lowest priority)
-# Uses the highest priority rule that matches to make a decision, and ignores any lower priority
-# rules that also match
+# Strong rules from highest to lowest priority; a pair takes the first one that matches.
 RULE_PRIORITIES = ("domain", "linkedin", "external_id", "name_city")
 
-# Dictionnary assigning a weight to each matching rule, used to compute a score for each match
-# candidate
+# Weight of each rule, used as a link's confidence and a candidate's score.
 RULE_WEIGHTS = {
     "domain": 1.0,
     "linkedin": 1.0,
@@ -27,17 +22,19 @@ RULE_WEIGHTS = {
 # Rules that only ever propose a pair for review.
 WEAK_RULES = frozenset({"name_only"})
 
-# Rules trusted to merge two existing organizations.
+# Rules of the deterministic first tier.
 TIER1_RULES = frozenset(RULE_PRIORITIES)
 
-# Tupple containing the two record version IDs
+# Rules trusted to merge two existing organizations; a shared name and city is not enough.
+MERGE_RULES = frozenset({"domain", "linkedin", "external_id"})
+
+# Two record version ids.
 Pair = tuple[UUID, UUID]
-# Inner tupples containing the field name and value for each matching field
+# (field, value) for each field a rule matched on.
 Fields = tuple[tuple[str, str], ...]
 
 
-# Class for a match candidate, containing the two record version IDs and the matching rule that
-# matched them
+# Two record versions and the rule that matched them.
 @dataclass(frozen=True)
 class MatchCandidateData:
     left: UUID
@@ -50,8 +47,7 @@ class MatchCandidateData:
         """Return the pair of record version IDs in a consistent order."""
         return (self.left, self.right) if self.left < self.right else (self.right, self.left)
 
-    # Distinguish rules that are strong enough to be used for automatic resolution from those that
-    # are not
+    # Strong rules may link records; weak ones only propose a pair for review.
     @property
     def strong(self) -> bool:
         return self.rule not in WEAK_RULES
@@ -62,12 +58,12 @@ def rule_weight(rule: str) -> float:
     return RULE_WEIGHTS.get(rule, 0.0)
 
 
-def strength_key(edge: MatchCandidateData) -> tuple:
+def strength_key(edge: MatchCandidateData) -> tuple[int, float, UUID, UUID]:
     """Sort key putting the strongest edge first: Tier 1 priority, then weight, then pair."""
     rank = RULE_PRIORITIES.index(edge.rule) if edge.rule in TIER1_RULES else len(RULE_PRIORITIES)
     return (rank, -rule_weight(edge.rule), *edge.providePair)
 
 
 def can_merge_organizations(edge: MatchCandidateData) -> bool:
-    """Only a Tier 1 edge may join two existing organizations."""
-    return edge.rule in TIER1_RULES
+    """Only an edge on a shared identifier may join two existing organizations."""
+    return edge.rule in MERGE_RULES

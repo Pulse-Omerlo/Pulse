@@ -36,8 +36,13 @@ def test_same_rule_sorts_by_pair_whatever_the_side():
     assert ordered == [earlier, later]
 
 
-def test_only_tier1_rules_can_merge_organizations():
-    # Act / Assert
-    assert match_rules.can_merge_organizations(edge("external_id"))
-    assert not match_rules.can_merge_organizations(edge("fuzzy"))
+def test_only_identifier_rules_can_merge_organizations():
+    # Act
+    allowed = [
+        rule
+        for rule in ("domain", "linkedin", "external_id", "name_city", "fuzzy")
+        if match_rules.can_merge_organizations(edge(rule))
+    ]
+    # Assert
+    assert allowed == ["domain", "linkedin", "external_id"]
     assert match_rules.rule_weight("fuzzy") == 0.0

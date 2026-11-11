@@ -195,6 +195,18 @@ def test_rule_outside_tier1_never_merges_two_organizations():
     assert [link.record_id for link in cluster.new_links] == [C]
 
 
+def test_name_city_edge_attaches_records_but_never_merges_organizations():
+    # Arrange: two branches of one franchise, each already its own organization.
+    items = members(Member(A), Member(B), Member(C))
+    links = {A: LinkFacts(ORG_1), B: LinkFacts(ORG_2)}
+    edges = [edge(A, B, "name_city"), edge(B, C, "name_city")]
+    # Act
+    plan = plan_clusters(items, edges, links)
+    # Assert
+    assert [(e.left, e.right) for e in plan.candidates] == [(A, B)]
+    assert [c.organization_id for c in plan.clusters if C in c.members] == [ORG_2]
+
+
 def test_rejected_pair_is_never_joined_through_a_third_record():
     # Arrange
     items = members(Member(A), Member(B), Member(C))
