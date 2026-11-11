@@ -1,7 +1,7 @@
 # AI contribution: Below 50% AI-generated
 import tomllib
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from functools import cache
 from itertools import combinations
@@ -24,28 +24,17 @@ from app.processing.clustering import (
     organization_domain,
     plan_clusters,
 )
+
+# Rule names stay importable from here for existing callers.
+from app.processing.match_rules import RULE_PRIORITIES as RULE_PRIORITIES
 from app.processing.match_rules import (
-    RULE_PRIORITIES,
     RULE_VERSION,
-    RULE_WEIGHTS,
     MatchCandidateData,
     Pair,
     rule_weight,
     strength_key,
 )
-
-__all__ = [
-    "RULE_PRIORITIES",
-    "RULE_VERSION",
-    "RULE_WEIGHTS",
-    "MatchCandidateData",
-    "MatchResult",
-    "blocked_matches",
-    "classify_pair",
-    "evidence",
-    "load_generic_domains",
-    "match_organizations",
-]
+from app.processing.match_rules import RULE_WEIGHTS as RULE_WEIGHTS
 
 # Get the domains from the config file
 GENERIC_DOMAINS_PATH = Path(__file__).with_name("generic_domains.toml")
@@ -246,7 +235,9 @@ def _current_links(session: Session, tenant_id: UUID) -> dict[UUID, OrgLink]:
     return {link.source_record_id: link for link in session.scalars(query)}
 
 
-def _decisions(session, tenant_id, records) -> dict[Pair, MatchCandidate]:
+def _decisions(
+    session: Session, tenant_id: UUID, records: Mapping[UUID, SourceRecord]
+) -> dict[Pair, MatchCandidate]:
     query = select(MatchCandidate).where(MatchCandidate.tenant_id == tenant_id)
     return {
         (candidate.left_record_id, candidate.right_record_id): candidate
@@ -265,7 +256,7 @@ def _manual_organizations(session: Session, tenant_id: UUID) -> set[UUID]:
     return set(session.scalars(query))
 
 
-def _organizations(session, tenant_id, ids: set[UUID]) -> dict[UUID, Organization]:
+def _organizations(session: Session, tenant_id: UUID, ids: set[UUID]) -> dict[UUID, Organization]:
     """The linked organizations, plus the ones they were merged into."""
     found = {}
     while ids:
@@ -368,11 +359,8 @@ def _apply(run: _Run, cluster: Cluster) -> None:
         organization.primary_domain = cluster.primary_domain
 
 
-# Function to match organizations for a given tenant, used to create organizations and links based
-# on the matching rules
-# Overall goal: 1->Load a tenant's current organization records and existing decisions, 2->Plan
-# clusters from the matches, 3->Create or merge organizations, links and review candidates,
-# 4->Return a summary of the results
+# Loads a tenant's current organization records and past decisions, plans the clusters, then
+# creates or merges organizations, links and review candidates in the caller's transaction.
 def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
     with bound_to_tenant(session, tenant_id):
         # Serialize matcher invocations for this tenant.

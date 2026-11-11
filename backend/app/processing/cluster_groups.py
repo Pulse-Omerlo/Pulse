@@ -5,9 +5,13 @@ from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from itertools import combinations
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from app.processing.match_rules import MatchCandidateData, can_merge_organizations
+
+if TYPE_CHECKING:
+    from app.processing.clustering import Member
 
 
 def _disagree(first: frozenset[str], second: frozenset[str]) -> bool:
@@ -34,7 +38,7 @@ class Identifiers:
     external: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
     @classmethod
-    def of(cls, member) -> "Identifiers":
+    def of(cls, member: "Member") -> "Identifiers":
         external = defaultdict(set)
         for namespace, value in member.external_ids:
             external[namespace].add(value)
