@@ -1,7 +1,7 @@
 # AI contribution: 50% or more AI-generated
 """Tier 1 people matching: same name plus a secondary identifier."""
 
-from collections import defaultdict, deque
+from collections import defaultdict
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from itertools import combinations
@@ -355,42 +355,62 @@ def _ensure_person(run: _PersonRun, group: set[UUID], person_ids: set[UUID]) -> 
     return person_id
 
 
+def _create_person_link(
+    run: _PersonRun,
+    *,
+    record_id: UUID,
+    person_id: UUID,
+    match: PersonMatch,
+    peer_id: UUID,
+) -> None:
+    link = PersonLink(
+        tenant_id=run.tenant_id,
+        source_record_id=record_id,
+        person_id=person_id,
+        method=match.rule,
+        confidence=PERSON_RULE_WEIGHTS[match.rule],
+        decided_by=f"tier1:{RULE_VERSION}",
+        evidence=evidence(match, peer_id),
+    )
+    run.session.add(link)
+    run.links[record_id] = link
+    run.result.links_created += 1
+    run.merged_person_ids.add(person_id)
+
+
 def _link_strong_group(
     run: _PersonRun, group: set[UUID], edges: list[PersonMatch], person_id: UUID
 ) -> None:
-    """Walk strong edges from existing members and create missing person links."""
+    """Link each unlinked member through the strong edge that reaches it first."""
     adjacency: dict[UUID, list[tuple[UUID, PersonMatch]]] = defaultdict(list)
     for match in edges:
         adjacency[match.left].append((match.right, match))
         adjacency[match.right].append((match.left, match))
 
-    roots = sorted(group & run.links.keys())
-    queue = deque(roots or [min(group)])
-    visited = set(queue)
-
-    while queue:
-        record_id = queue.popleft()
+    roots = sorted(group & run.links.keys()) or [min(group)]
+    linked = set(roots) & run.links.keys()
+    queue = list(roots)
+    for record_id in queue:
         for neighbor, match in adjacency[record_id]:
-            if neighbor in visited:
-                continue
-            for endpoint, other in ((record_id, neighbor), (neighbor, record_id)):
-                if endpoint in run.links:
-                    continue
-                link = PersonLink(
-                    tenant_id=run.tenant_id,
-                    source_record_id=endpoint,
+            if record_id not in linked:
+                _create_person_link(
+                    run,
+                    record_id=record_id,
                     person_id=person_id,
-                    method=match.rule,
-                    confidence=PERSON_RULE_WEIGHTS[match.rule],
-                    decided_by=f"tier1:{RULE_VERSION}",
-                    evidence=evidence(match, other),
+                    match=match,
+                    peer_id=neighbor,
                 )
-                run.session.add(link)
-                run.links[endpoint] = link
-                run.result.links_created += 1
-                run.merged_person_ids.add(person_id)
-            visited.add(neighbor)
-            queue.append(neighbor)
+                linked.add(record_id)
+            if neighbor not in linked:
+                _create_person_link(
+                    run,
+                    record_id=neighbor,
+                    person_id=person_id,
+                    match=match,
+                    peer_id=record_id,
+                )
+                linked.add(neighbor)
+                queue.append(neighbor)
 
 
 def _apply_strong_groups(
