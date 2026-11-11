@@ -80,6 +80,8 @@ class MatchResult:
     links_created: int = 0
     # Counts new pairs set aside for review.
     candidates_created: int = 0
+    # Counts organizations, new or existing, that gained linked records.
+    organizations_merged: int = 0
 
 
 # Function to load the generic domains from the config file, used to filter out matches on generic
@@ -295,13 +297,27 @@ def components(matches: Iterable[MatchCandidateData]) -> list[set[UUID]]:
     return groups
 
 
+# Function to check if one of the record ids is in changed_ids
+# When changed_ids is None, every record counts as changed
+def has_changed_record(record_ids: Iterable[UUID], changed_ids: set[UUID] | None) -> bool:
+    if changed_ids is None:
+        return True
+    # The two sets share at least one id
+    common_ids = changed_ids & set(record_ids)
+    return len(common_ids) > 0
+
+
 # Function to match organizations for a given tenant, used to create organizations and links based
 # on the matching rules
 # Overall goal: 1->Load a tenant's current organization records and exisitng decisions, 2->Find
 # matches and connected groups, 3->Check each group for conflicts, 4->Create organizations, links or
 # review candidates as appropriate, 5->Return a summary of the results
 # AI Assisted with debugging and optimization
-def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
+# If changed_ids is given, only groups and pairs that contain one of those records are decided.
+# The other current records are still loaded so the changed records can be compared to them.
+def match_organizations(
+    session: Session, tenant_id: UUID, changed_ids: set[UUID] | None = None
+) -> MatchResult:
     # Load the tenant's current organization records and existing decisions, and lock the tenant row
     # to prevent concurrent matching for the same tenant.
     with bound_to_tenant(session, tenant_id):
@@ -350,6 +366,8 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
 
         matches = blocked_matches(records.values(), load_generic_domains())
         organizations_created = links_created = candidates_created = 0
+        # Organizations that received at least one new link
+        merged_organization_ids = set()
 
         def add_candidate(match: MatchCandidateData) -> None:
             nonlocal candidates_created
@@ -369,6 +387,8 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
             candidates_created += 1
 
         for group in components(matches):
+            if not has_changed_record(group, changed_ids):
+                continue
             edges = [
                 match
                 for match in matches
@@ -451,6 +471,7 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
                         session.add(link)
                         links[record_id] = link
                         links_created += 1
+                        merged_organization_ids.add(organization_id)
 
                     if neighbor not in links:
                         link = OrgLink(
@@ -465,12 +486,15 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
                         session.add(link)
                         links[neighbor] = link
                         links_created += 1
+                        merged_organization_ids.add(organization_id)
 
                     visited.add(neighbor)
                     queue.append(neighbor)
 
         for match in matches:
             if match.strong:
+                continue
+            if not has_changed_record([match.left, match.right], changed_ids):
                 continue
             left, right = links.get(match.left), links.get(match.right)
             if left and right and left.organization_id == right.organization_id:
@@ -482,4 +506,5 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
             organizations_created=organizations_created,
             links_created=links_created,
             candidates_created=candidates_created,
+            organizations_merged=len(merged_organization_ids),
         )
