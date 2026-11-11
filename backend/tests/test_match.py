@@ -46,6 +46,24 @@ def test_a_failed_rerun_reports_the_matching_error(mocker, session):
         match.match_run(session, uuid.uuid4())
 
 
+def test_a_failed_people_rerun_reports_the_people_error(mocker, session):
+    # Arrange
+    from app.processing.entity_resolution import MatchResult
+
+    run = SyncRun(
+        tenant_id=uuid.uuid4(),
+        status="succeeded",
+        counts={"matching": {}, "matching_people": {"error": "people boom"}},
+    )
+    session.get.return_value = run
+    mocker.patch.object(match, "match_after_sync", return_value=MatchResult())
+    mocker.patch.object(match, "log_org_summary")
+
+    # Act / Assert
+    with pytest.raises(SyncCommandError, match="People matching failed: people boom"):
+        match.match_run(session, uuid.uuid4())
+
+
 def test_the_command_needs_a_tenant_or_a_sync_run():
     # Act / Assert
     with pytest.raises(SystemExit) as exit_info:

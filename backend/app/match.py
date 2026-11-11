@@ -40,14 +40,24 @@ def log_people_summary(tenant_id: uuid.UUID, result: PersonMatchResult) -> None:
 
 
 def match_tenant(session, tenant: str) -> tuple[MatchResult, PersonMatchResult]:
-    """Match every current organization and person of the tenant."""
+    """Match every current organization and person of the tenant.
+
+    Organizations commit first so a people failure cannot roll them back.
+    """
     with system_access(session):
         tenant_id = find_tenant(session, tenant).id
     with bound_to_tenant(session, tenant_id):
         org_result = match_organizations(session, tenant_id)
-        people_result = match_people(session, tenant_id)
         session.commit()
     log_org_summary(tenant_id, org_result)
+
+    try:
+        with bound_to_tenant(session, tenant_id):
+            people_result = match_people(session, tenant_id)
+            session.commit()
+    except Exception as error:
+        session.rollback()
+        raise SyncCommandError(f"People matching failed: {error}") from error
     log_people_summary(tenant_id, people_result)
     return org_result, people_result
 
@@ -64,12 +74,22 @@ def match_run(session, run_id: uuid.UUID) -> MatchResult:
     tenant_id = run.tenant_id
     with bound_to_tenant(session, tenant_id):
         result = match_after_sync(session, run)
+        people = (run.counts or {}).get("matching_people") or {}
+        if result is not None:
+            log_org_summary(tenant_id, result)
         if result is None:
             raise SyncCommandError(f"Matching failed: {run.counts['matching']['error']}")
-        people = (run.counts or {}).get("matching_people") or {}
         if "error" in people:
             raise SyncCommandError(f"People matching failed: {people['error']}")
-    log_org_summary(tenant_id, result)
+        log_people_summary(
+            tenant_id,
+            PersonMatchResult(
+                people_created=people.get("people_created", 0),
+                people_merged=people.get("people_merged", 0),
+                links_created=people.get("links_created", 0),
+                candidates_created=people.get("candidates_created", 0),
+            ),
+        )
     return result
 
 

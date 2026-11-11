@@ -127,11 +127,6 @@ def score_people(tenant_number, tenant_data):
     return score(expected, predicted)
 
 
-# Kept for existing tests that call the old name.
-build_records = build_organization_records
-score_tenant = score_organizations
-
-
 def log_score(tenant, result, *, kind="organization"):
     logger.info(
         "tier1_score",

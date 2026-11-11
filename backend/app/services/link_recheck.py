@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from itertools import batched, chain
 from uuid import UUID
@@ -18,8 +18,8 @@ from app.models import OrgLink, PersonLink, SourceRecord, SyncRun
 from app.processing.entity_resolution import load_generic_domains
 from app.processing.link_recheck import (
     ORGANIZATION_RECHECK,
+    PERSON_RECHECK,
     REASON_UNVERIFIABLE,
-    RECHECK_KINDS,
     RecheckKind,
     evidence_holds,
     matching_changes,
@@ -42,6 +42,32 @@ class RecheckResult:
     dropped: int = 0
     unverifiable: int = 0
     dropped_ids: tuple[UUID, ...] = ()
+
+
+@dataclass(frozen=True)
+class LinkKind:
+    """ORM wiring for one RecheckKind."""
+
+    recheck: RecheckKind
+    model: type[LinkRow]
+    entity_id_of: Callable[[LinkRow], UUID]
+    entity_column: object
+
+
+LINK_KINDS = (
+    LinkKind(
+        ORGANIZATION_RECHECK,
+        OrgLink,
+        lambda link: link.organization_id,
+        OrgLink.organization_id,
+    ),
+    LinkKind(
+        PERSON_RECHECK,
+        PersonLink,
+        lambda link: link.person_id,
+        PersonLink.person_id,
+    ),
+)
 
 
 @dataclass
@@ -81,8 +107,8 @@ def recheck_links(
         versions = _load_versions(session, carried)
         excluded = excluded_domains if excluded_domains is not None else load_generic_domains()
         counts = _Counts()
-        for spec in RECHECK_KINDS:
-            _recheck_kind(session, run, carried, versions, spec, excluded, counts)
+        for kind in LINK_KINDS:
+            _recheck_kind(session, run, carried, versions, kind, excluded, counts)
         if counts.dropped:
             session.flush()
         result = counts.freeze()
@@ -104,23 +130,24 @@ def _recheck_kind(
     run: SyncRun,
     carried: Sequence[tuple[UUID, UUID]],
     versions: dict[UUID, SourceRecord],
-    spec: RecheckKind,
+    kind: LinkKind,
     excluded: frozenset[str],
     counts: _Counts,
 ) -> None:
+    spec = kind.recheck
     changed = _changed_new_ids(carried, versions, spec)
     if not changed:
         return
 
-    links = _automatic_links(session, run.tenant_id, changed, spec)
+    links = _automatic_links(session, run.tenant_id, changed, kind)
     if not links:
         return
 
-    entity_ids = {_entity_id(link) for link in links}
-    members_by_entity = _current_members(session, run.tenant_id, entity_ids, spec)
+    entity_ids = {kind.entity_id_of(link) for link in links}
+    members_by_entity = _current_members(session, run.tenant_id, entity_ids, kind)
     for link in links:
         record = versions[link.source_record_id]
-        members = members_by_entity.get(_entity_id(link), ())
+        members = members_by_entity.get(kind.entity_id_of(link), ())
         verdict = evidence_holds(
             link.method,
             link.evidence,
@@ -140,7 +167,7 @@ def _recheck_kind(
                     "sync_run_id": str(run.id),
                     "source_record_id": str(link.source_record_id),
                     "kind": spec.kind,
-                    "entity_id": str(_entity_id(link)),
+                    "entity_id": str(kind.entity_id_of(link)),
                     "reason": verdict.reason,
                     "method": link.method,
                 },
@@ -151,12 +178,6 @@ def _recheck_kind(
         session.delete(link)
         counts.dropped += 1
         counts.dropped_ids.append(link.source_record_id)
-
-
-def _entity_id(link: LinkRow) -> UUID:
-    if isinstance(link, OrgLink):
-        return link.organization_id
-    return link.person_id
 
 
 def _load_versions(
@@ -193,9 +214,9 @@ def _changed_new_ids(
 
 
 def _automatic_links(
-    session: Session, tenant_id: UUID, source_record_ids: set[UUID], spec: RecheckKind
+    session: Session, tenant_id: UUID, source_record_ids: set[UUID], kind: LinkKind
 ) -> list[LinkRow]:
-    model: type[LinkRow] = OrgLink if spec is ORGANIZATION_RECHECK else PersonLink
+    model = kind.model
     links: list[LinkRow] = []
     for batch in batched(source_record_ids, BATCH_SIZE):
         links.extend(
@@ -203,7 +224,7 @@ def _automatic_links(
                 select(model).where(
                     model.tenant_id == tenant_id,
                     model.source_record_id.in_(batch),
-                    model.method.in_(spec.automatic_methods),
+                    model.method.in_(kind.recheck.automatic_methods),
                 )
             )
         )
@@ -214,18 +235,14 @@ def _current_members(
     session: Session,
     tenant_id: UUID,
     entity_ids: Iterable[UUID],
-    spec: RecheckKind,
+    kind: LinkKind,
 ) -> dict[UUID, tuple[SourceRecord, ...]]:
     ids = set(entity_ids)
     if not ids:
         return {}
     by_entity: dict[UUID, list[SourceRecord]] = defaultdict(list)
-    if spec is ORGANIZATION_RECHECK:
-        id_column = OrgLink.organization_id
-        model = OrgLink
-    else:
-        id_column = PersonLink.person_id
-        model = PersonLink
+    model = kind.model
+    id_column = kind.entity_column
     for batch in batched(ids, BATCH_SIZE):
         rows = session.execute(
             select(id_column, SourceRecord)
@@ -234,7 +251,7 @@ def _current_members(
                 model.tenant_id == tenant_id,
                 SourceRecord.tenant_id == tenant_id,
                 id_column.in_(batch),
-                SourceRecord.kind == spec.kind,
+                SourceRecord.kind == kind.recheck.kind,
                 SourceRecord.valid_to.is_(None),
             )
         )

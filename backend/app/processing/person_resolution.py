@@ -190,10 +190,11 @@ def blocked_person_matches(records: Iterable[SourceRecord]) -> list[PersonMatch]
             blocks[(record.tenant_id, *key)].append(record.id)
 
     pairs: set[Pair] = set()
-    for members in blocks.values():
-        if len(members) > MAX_PERSON_BLOCK:
+    for key, members in blocks.items():
+        # Cap only common-name blocks; identifier blocks stay, or real matches are lost.
+        if key[1] == "name" and len(members) > MAX_PERSON_BLOCK:
             logger.warning(
-                "person_block_skipped",
+                "person_name_block_skipped",
                 extra={"size": len(members), "cap": MAX_PERSON_BLOCK},
             )
             continue
@@ -212,10 +213,25 @@ def blocked_person_matches(records: Iterable[SourceRecord]) -> list[PersonMatch]
 
 
 def conflicting_person_identifiers(records: Iterable[SourceRecord]) -> bool:
-    linkedin = set()
-    for record in records:
-        linkedin |= person_linkedins(record)
-    return len(linkedin) > 1
+    """True when members' person LinkedIn sets share no common handle.
+
+    One record may list several aliases. Conflict only when the nonempty sets
+    across members have an empty intersection (same idea as org external ids).
+    """
+    nonempty = [values for record in records if (values := person_linkedins(record))]
+    if len(nonempty) <= 1:
+        return False
+    return not set.intersection(*nonempty)
+
+
+def person_display_name(record: SourceRecord) -> str:
+    attributes = record.attributes or {}
+    named = " ".join(
+        part
+        for part in (attributes.get("first_name"), attributes.get("last_name"))
+        if isinstance(part, str) and part.strip()
+    )
+    return named or record.name_normalized or record.external_id
 
 
 def match_people(
@@ -311,19 +327,13 @@ def match_people(
             else:
                 first = records[min(group)]
                 person_id = uuid4()
-                display = (
-                    " ".join(
-                        part
-                        for part in (
-                            (first.attributes or {}).get("first_name"),
-                            (first.attributes or {}).get("last_name"),
-                        )
-                        if isinstance(part, str) and part.strip()
+                session.add(
+                    Person(
+                        id=person_id,
+                        tenant_id=tenant_id,
+                        display_name=person_display_name(first),
                     )
-                    or first.name_normalized
-                    or first.external_id
                 )
-                session.add(Person(id=person_id, tenant_id=tenant_id, display_name=display))
                 session.flush()
                 people_created += 1
 

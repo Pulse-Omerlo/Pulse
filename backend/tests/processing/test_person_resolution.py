@@ -231,10 +231,10 @@ def test_blocking_groups_by_email_and_keeps_tenants_apart():
     assert matches[0].providePair == (items[0].id, items[1].id)
 
 
-def test_oversized_blocks_are_skipped(monkeypatch):
+def test_oversized_name_blocks_are_skipped(monkeypatch):
     # Arrange
     monkeypatch.setattr(pr, "MAX_PERSON_BLOCK", 2)
-    items = [with_identifiers(n, "common name", emails=["same@example.com"]) for n in range(1, 5)]
+    items = [with_identifiers(n, "common name") for n in range(1, 5)]
 
     # Act
     matches = pr.blocked_person_matches(items)
@@ -243,11 +243,25 @@ def test_oversized_blocks_are_skipped(monkeypatch):
     assert matches == []
 
 
+def test_oversized_email_blocks_are_still_matched(monkeypatch):
+    # Arrange: identifier blocks are not capped, or real email matches are lost.
+    monkeypatch.setattr(pr, "MAX_PERSON_BLOCK", 2)
+    items = [with_identifiers(n, f"person {n}", emails=["same@example.com"]) for n in range(1, 5)]
+
+    # Act
+    matches = pr.blocked_person_matches(items)
+
+    # Assert
+    assert matches
+    assert all(match.rule == "email_name_conflict" for match in matches)
+
+
 @pytest.mark.parametrize(
     ("first", "second", "conflict"),
     [
         ({"linkedin": ["in/a"]}, {"linkedin": ["in/b"]}, True),
         ({"linkedin": ["in/a"]}, {"linkedin": ["in/a"]}, False),
+        ({"linkedin": ["in/a", "in/b"]}, {"linkedin": ["in/a"]}, False),
         ({"emails": ["a@x.com"]}, {"emails": ["b@x.com"]}, False),
     ],
 )
@@ -260,6 +274,14 @@ def test_conflicting_person_linkedin(first, second, conflict):
 
     # Act / Assert
     assert pr.conflicting_person_identifiers(records) is conflict
+
+
+def test_one_record_with_two_linkedin_aliases_is_not_a_conflict():
+    # Arrange
+    alone = with_identifiers(1, "marie", linkedin=["in/a", "in/b"])
+
+    # Act / Assert
+    assert pr.conflicting_person_identifiers([alone]) is False
 
 
 def test_conflict_candidates_are_not_strong_components():
