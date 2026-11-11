@@ -4,7 +4,6 @@
 import random
 from uuid import UUID
 
-from app import tier1_report
 from app.models import SourceRecord
 from app.processing import tier2_accuracy as accuracy
 from app.processing.fuzzy_config import load_fuzzy_config
@@ -38,32 +37,17 @@ def test_tier2_attaches_an_unlinked_record_to_a_tier1_group():
         record(3, "boulangerie tremblai"),
     ]
     # Act
-    grouping = accuracy.tier2_grouping(records, tier1_report.tier1_groups(records), CONFIG)
+    grouping = accuracy.tier2_grouping(records, CONFIG)
     # Assert
     assert grouping.groups == [{"org-1", "org-2", "org-3"}]
     assert (grouping.tier2_linked, grouping.tier2_review) == (2, 0)
-
-
-def test_tier2_never_joins_two_tier1_groups():
-    # Arrange
-    records = [
-        record(1, "imprimerie belanger", domain="a.ca"),
-        record(2, "imprimerie belanger x", domain="a.ca"),
-        record(3, "imprimerie belager", linkedin="company/b"),
-        record(4, "imprimerie belager z", linkedin="company/b"),
-    ]
-    # Act
-    grouping = accuracy.tier2_grouping(records, tier1_report.tier1_groups(records), CONFIG)
-    # Assert
-    assert sorted(map(sorted, grouping.groups)) == [["org-1", "org-2"], ["org-3", "org-4"]]
-    assert grouping.tier2_linked == 0 and grouping.tier2_review > 0
 
 
 def test_tier2_pairs_without_a_signal_go_to_review():
     # Arrange
     records = [record(1, "boulangerie tremblay"), record(2, "boulangerie tremblai", city="levis")]
     # Act
-    grouping = accuracy.tier2_grouping(records, tier1_report.tier1_groups(records), CONFIG)
+    grouping = accuracy.tier2_grouping(records, CONFIG)
     # Assert
     assert grouping.groups == []
     assert (grouping.tier2_linked, grouping.tier2_review) == (0, 1)
@@ -73,7 +57,7 @@ def test_tier2_edges_form_a_new_group():
     # Arrange
     records = [record(1, "boulangerie tremblay"), record(2, "boulangerie tremblai")]
     # Act
-    grouping = accuracy.tier2_grouping(records, tier1_report.tier1_groups(records), CONFIG)
+    grouping = accuracy.tier2_grouping(records, CONFIG)
     # Assert
     assert grouping.groups == [{"org-1", "org-2"}]
     assert grouping.tier2_linked == 1

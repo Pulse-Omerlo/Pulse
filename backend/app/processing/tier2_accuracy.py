@@ -1,18 +1,15 @@
 # AI contribution: 50% or more AI-generated
-"""Group records with Tier 1 then Tier 2, as the matcher does, for the dev-only report."""
+"""Group records with Tier 1 and Tier 2, as the matcher does, for the dev-only report."""
 
 import random
 import string
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from uuid import UUID
 
 from app.models import SourceRecord
-from app.processing.cluster_groups import Identifiers, any_disagree
-from app.processing.clustering import member_from_record
-from app.processing.entity_resolution import blocked_matches, load_generic_domains
+from app.processing.clustering import member_from_record, plan_clusters
+from app.processing.entity_resolution import blocked_matches, fuzzy_edges, load_generic_domains
 from app.processing.fuzzy_config import FuzzyConfig
-from app.processing.fuzzy_matching import FuzzyMatch, fuzzy_matches
 
 # Name tokens at least this long get the typo, so short words stay readable.
 TYPO_MIN_TOKEN_LENGTH = 5
@@ -27,61 +24,24 @@ class Grouping:
     tier2_review: int = 0
 
 
-def _strong_components(matches: Iterable[FuzzyMatch]) -> list[tuple[set[UUID], list[FuzzyMatch]]]:
-    """Connected records of the strong Tier 2 edges, with the edges of each."""
-    parent: dict[UUID, UUID] = {}
-
-    def find(node: UUID) -> UUID:
-        while parent.setdefault(node, node) != node:
-            node = parent[node]
-        return node
-
-    strong = [match for match in matches if match.strong]
-    for match in strong:
-        parent[find(match.left)] = find(match.right)
-    groups: dict[UUID, tuple[set[UUID], list[FuzzyMatch]]] = {}
-    for match in strong:
-        members, edges = groups.setdefault(find(match.left), (set(), []))
-        members.update(match.pair)
-        edges.append(match)
-    return [groups[root] for root in sorted(groups)]
-
-
-def tier2_grouping(
-    records: Sequence[SourceRecord], tier1_groups: Iterable[set[str]], config: FuzzyConfig
-) -> Grouping:
-    """Tier 1's groups of external ids, then Tier 2 edges that attach unlinked records or
-    form new groups. A Tier 2 edge never joins two Tier 1 groups; it goes to review instead.
-    """
+def tier2_grouping(records: Sequence[SourceRecord], config: FuzzyConfig) -> Grouping:
+    """Plan Tier 1 and Tier 2 edges together, as match_organizations does."""
     by_id = {record.id: record for record in records}
-    by_external_id = {record.external_id: record.id for record in records}
     excluded = load_generic_domains()
-    known = {match.providePair for match in blocked_matches(records, excluded)}
-    groups = [{by_external_id[key] for key in group} for group in tier1_groups]
-    owner = {record_id: index for index, group in enumerate(groups) for record_id in group}
-    tier2 = fuzzy_matches(records, excluded, known, config)
-    linked = review = 0
-
-    for members, edges in _strong_components(tier2):
-        touched = {owner[record_id] for record_id in members if record_id in owner}
-        everyone = members.union(*(groups[index] for index in touched))
-        found = [Identifiers.of(member_from_record(by_id[key], excluded)) for key in everyone]
-        if len(touched) > 1 or any_disagree(found):
-            review += len(edges)
-            continue
-        index = touched.pop() if touched else len(groups)
-        if index == len(groups):
-            groups.append(set())
-        groups[index] |= members
-        owner.update(dict.fromkeys(members, index))
-        linked += len(edges)
-
-    for match in tier2:
-        same = match.left in owner and owner[match.left] == owner.get(match.right)
-        if not match.strong and not same:
-            review += 1
+    members = {record.id: member_from_record(record, excluded) for record in records}
+    tier1 = blocked_matches(records, excluded)
+    tier2 = fuzzy_edges(records, excluded, tier1, config)
+    plan = plan_clusters(members, tier1 + tier2, {})
+    cut = {edge.providePair for edge in plan.candidates}
+    owner = {record_id: index for index, c in enumerate(plan.clusters) for record_id in c.members}
+    linked = sum(edge.strong and edge.providePair not in cut for edge in tier2)
+    review = sum(
+        edge.providePair in cut
+        or (not edge.strong and owner.get(edge.left, -1) != owner.get(edge.right, -2))
+        for edge in tier2
+    )
     return Grouping(
-        groups=[{by_id[record_id].external_id for record_id in group} for group in groups],
+        groups=[{by_id[key].external_id for key in cluster.members} for cluster in plan.clusters],
         tier2_linked=linked,
         tier2_review=review,
     )

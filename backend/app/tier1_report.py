@@ -61,9 +61,8 @@ def tier1_groups(records):
 
 def score_tenant(records, expected, config):
     """Tier 1 alone, then Tier 1 plus Tier 2, against the same expected pairs."""
-    tier1_alone = tier1_groups(records)
-    grouping = tier2_grouping(records, tier1_alone, config)
-    tier1 = score(expected, predicted_pairs(tier1_alone))
+    grouping = tier2_grouping(records, config)
+    tier1 = score(expected, predicted_pairs(tier1_groups(records)))
     both = score(expected, predicted_pairs(grouping.groups))
     return tier1, {**both, "linked": grouping.tier2_linked, "review": grouping.tier2_review}
 
