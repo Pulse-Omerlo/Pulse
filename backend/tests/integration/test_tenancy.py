@@ -221,8 +221,8 @@ def test_counts_and_joins_are_scoped(session, tenant_a, tenant_b):
             )
         ).all()
 
-    # Assert
-    assert count == 2
+    # Assert: two orgs plus one person in add_graph.
+    assert count == 3
     assert [change.tenant_id for change, _ in joined] == [tenant_a.tenant.id]
 
 
