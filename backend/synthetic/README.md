@@ -198,15 +198,40 @@ Every record gets an external id such as `syn-sector-gaps-490-org-0005`, stored 
 
 `synthetic/targets/omerlo_staging.toml` holds the staging ids (tenant, workspace, profile types, statuses, the Employeur block type). Only `OMERLO_API_KEY` comes from the root `.env`; `OMERLO_BASE_URL` is ignored here, so a run cannot reach production by mistake.
 
-A run:
+#### One-time setup of a tenant
+
+The staging tenant "Projet Pulse" is already set up. Another tenant needs the same, done by an admin in the Omerlo CMS (Administration):
+
+| Where | What | Why |
+|-------|------|-----|
+| Composer > Workspaces > *workspace* > Members | Add the account that owns the API key: read on every profile type, write on the organization and person types | Without membership the key sees no workspace and gets 403 on blocks |
+| Composer > Profile Types > *person type* > Allowed Block Types | Tick **Employeur** | Otherwise a person cannot hold the link to their employer |
+| Composer > Profile Types > *organization type* > Metadata | Add the keys `pulse_external_id` and `crm_id` | Omerlo refuses any metadata key not declared on the profile type |
+| Composer > Profile Types > *person type* > Metadata | Add the key `pulse_external_id` | Same |
+
+Then put the tenant's ids in a target file (copy `omerlo_staging.toml`) and pass it with `--target`. The Employeur block type id is in the URL of its page under Profile Block Types.
+
+A missing metadata key shows as `400 metadata.key is invalid`. The run stops at the first such refusal, because the record it just created has no external id and a rerun would create it again. Declare the keys, then tag that record (`PUT /community/v2/{organizations|people}/{id}/metadata` with its external id) or delete it, and run again.
+
+#### A run
 
 1. **Guard:** stops before any write unless the host is a test host (never `ca.` or `eu.omerlo.app`), the workspace is visible to the key, the plan's locales are allowed, and no record in the workspace belongs to another tenant.
 2. **Reconcile:** reads the workspace and the metadata of each record. Records with our external id are skipped; records without it are counted as untouched and never changed.
 3. Creates organizations, then people, each followed by its metadata; then links each person to their employer through the Employeur block.
-4. Retries a refused write once, then reports it with Omerlo's reason and moves on. A 401 or 403 stops the run.
+4. Retries a refused write once, then reports it with Omerlo's reason and moves on. A 401 or 403 stops the run, and so does refused metadata (see above).
 
 Running it twice creates nothing the second time. `--dry-run` does steps 1 and 2 and prints what it would create.
 
 `--writer api` (default) calls the backoffice API. `--writer cli --cli-command "..."` hands each call to an external command instead (for example a CLI with the Omerlo MCP): the command gets the operation name as its last argument and a JSON object on stdin, and prints `{"result": ...}` or `{"error": "...", "status": 400}`.
 
-Exit codes: 0 when everything was written or skipped, 1 when some records were rejected, 2 when the mix or the guard refused the run, 3 when the key was refused.
+Exit codes: 0 when everything was written or skipped, 1 when some records were rejected, 2 when the mix or the guard refused the run, 3 when the key was refused, 4 when the run stopped after refused metadata.
+
+#### What staging does that the documentation does not say
+
+Found while writing the first runs (November 2026):
+
+- **Metadata keys** must be declared on the profile type, as above.
+- **Validation errors** come back as `{"status": 400, "errors": {"metadata": [{"key": ["is invalid"]}]}}`, not as the documented `{"error": "..."}`. The run report flattens them to `metadata.key is invalid`.
+- **Pagination:** lists return 25 items by default. `meta.next` is a path from the host, `/api/community/v2/...?after=<cursor>&limit=...&sort_by=...`, that already carries the request's parameters; `app/ingestion/omerlo/pagination.py` follows it as is.
+- **Social links** are stored without a scheme (`www.linkedin.com/...`); the payload builder strips `https://`.
+- **A `{"data": [...]}` body on the metadata PUT** answers 200 and saves nothing: the body is the bare list of entries.
