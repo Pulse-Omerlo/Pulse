@@ -98,6 +98,8 @@ def recheck_links(
                     "automatic link evidence unverifiable",
                     extra={
                         "sync_run_id": str(run.id),
+                        "source_record_id": str(link.source_record_id),
+                        "organization_id": str(link.organization_id),
                         "reason": verdict.reason,
                         "method": link.method,
                     },
@@ -133,7 +135,12 @@ def _load_versions(
     for batch in batched(ids, BATCH_SIZE):
         found.update(
             (record.id, record)
-            for record in session.scalars(select(SourceRecord).where(SourceRecord.id.in_(batch)))
+            for record in session.scalars(
+                select(SourceRecord).where(
+                    SourceRecord.id.in_(batch),
+                    SourceRecord.kind == "organization",
+                )
+            )
         )
     return found
 

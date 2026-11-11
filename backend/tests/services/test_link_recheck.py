@@ -83,41 +83,51 @@ def session(mocker):
 
 
 def test_empty_carried_does_nothing(session, mocker):
+    # Arrange
     load = mocker.patch.object(service, "_load_versions")
 
+    # Act
     result = recheck_links(session, run(), [])
 
+    # Assert
     assert result == RecheckResult()
     load.assert_not_called()
     session.delete.assert_not_called()
 
 
 def test_no_matching_field_change_skips_links(session, mocker):
+    # Arrange
     before = version(OLD_ID)
     after = version(NEW_ID)
     mocker.patch.object(service, "_load_versions", return_value={OLD_ID: before, NEW_ID: after})
     links = mocker.patch.object(service, "_automatic_links")
 
+    # Act
     result = recheck_links(session, run(), [(OLD_ID, NEW_ID)])
 
+    # Assert
     assert result == RecheckResult()
     links.assert_not_called()
     session.delete.assert_not_called()
 
 
 def test_person_carried_pair_is_ignored(session, mocker):
+    # Arrange
     before = version(OLD_ID, kind="person", domain=None, name_normalized="bob")
     after = version(NEW_ID, kind="person", domain=None, name_normalized="alice")
     mocker.patch.object(service, "_load_versions", return_value={OLD_ID: before, NEW_ID: after})
     links = mocker.patch.object(service, "_automatic_links")
 
+    # Act
     result = recheck_links(session, run(), [(OLD_ID, NEW_ID)])
 
+    # Assert
     assert result == RecheckResult()
     links.assert_not_called()
 
 
 def test_drops_failing_automatic_link(session, mocker):
+    # Arrange
     before = version(OLD_ID, domain="acme.io")
     after = version(NEW_ID, domain="new.io")
     link = automatic_link()
@@ -130,8 +140,10 @@ def test_drops_failing_automatic_link(session, mocker):
         return_value=LinkVerdict(holds=False, reason=REASON_VALUE_CHANGED),
     )
 
+    # Act
     result = recheck_links(session, run(), [(OLD_ID, NEW_ID)], excluded_domains=EXCLUDED)
 
+    # Assert
     assert result == RecheckResult(
         checked=1, kept=0, dropped=1, unverifiable=0, dropped_ids=(NEW_ID,)
     )
@@ -140,6 +152,7 @@ def test_drops_failing_automatic_link(session, mocker):
 
 
 def test_keeps_holding_link_without_delete(session, mocker):
+    # Arrange
     before = version(OLD_ID, name_normalized="old")
     after = version(NEW_ID, name_normalized="new")
     link = automatic_link()
@@ -152,14 +165,17 @@ def test_keeps_holding_link_without_delete(session, mocker):
         return_value=LinkVerdict(holds=True, reason=REASON_HOLDS),
     )
 
+    # Act
     result = recheck_links(session, run(), [(OLD_ID, NEW_ID)], excluded_domains=EXCLUDED)
 
+    # Assert
     assert result == RecheckResult(checked=1, kept=1, dropped=0, unverifiable=0)
     session.delete.assert_not_called()
     session.flush.assert_not_called()
 
 
 def test_unverifiable_evidence_is_kept_and_counted(session, mocker):
+    # Arrange
     before = version(OLD_ID, domain="acme.io")
     after = version(NEW_ID, domain="other.io")
     link = automatic_link(evidence=[])
@@ -172,19 +188,27 @@ def test_unverifiable_evidence_is_kept_and_counted(session, mocker):
         return_value=LinkVerdict(holds=True, reason=REASON_UNVERIFIABLE),
     )
 
+    # Act
     result = recheck_links(session, run(), [(OLD_ID, NEW_ID)], excluded_domains=EXCLUDED)
 
+    # Assert
     assert result == RecheckResult(checked=1, kept=1, dropped=0, unverifiable=1)
     session.delete.assert_not_called()
 
 
-def test_recheck_does_not_call_the_matcher(session, mocker):
+def test_drop_uses_real_evidence_holds_when_domain_changes(session, mocker):
+    # Arrange
     before = version(OLD_ID, domain="acme.io")
     after = version(NEW_ID, domain="new.io")
+    partner = version(UUID(int=3), domain="acme.io")
+    link = automatic_link()
     mocker.patch.object(service, "_load_versions", return_value={OLD_ID: before, NEW_ID: after})
-    mocker.patch.object(service, "_automatic_links", return_value=[])
-    match = mocker.patch("app.processing.entity_resolution.match_organizations")
+    mocker.patch.object(service, "_automatic_links", return_value=[link])
+    mocker.patch.object(service, "_current_members", return_value={ORG_ID: (after, partner)})
 
-    recheck_links(session, run(), [(OLD_ID, NEW_ID)], excluded_domains=EXCLUDED)
+    # Act
+    result = recheck_links(session, run(), [(OLD_ID, NEW_ID)], excluded_domains=EXCLUDED)
 
-    match.assert_not_called()
+    # Assert
+    assert result.dropped == 1
+    session.delete.assert_called_once_with(link)

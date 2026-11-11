@@ -5,12 +5,12 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 from uuid import UUID
 
 from app.models import SourceRecord
 from app.models.resolution import AUTOMATIC_LINK_METHODS, RuleEvidence
-from app.processing.entity_resolution import external_keys
+from app.processing.entity_resolution import LINKEDIN_COMPANY_PREFIX, external_keys
 
 MATCHING_FIELDS = (
     "name_normalized",
@@ -26,12 +26,18 @@ REASON_PARTNER_CHANGED = "partner_changed"
 REASON_UNVERIFIABLE = "unverifiable"
 
 EXTERNAL_IDS_PREFIX = "external_ids."
-LINKEDIN_COMPANY_PREFIX = "company/"
+KNOWN_EVIDENCE_FIELDS = frozenset({"domain", "linkedin", "name_normalized", "city"})
+RULE_EVIDENCE_KEYS = ("rule", "field", "value", "matched_value", "matched_record_id")
+MANUAL_EVIDENCE_KEY = "decided_by"
 
 
 @dataclass(frozen=True)
 class LinkVerdict:
-    """Whether an automatic link still holds, and why."""
+    """Whether an automatic link still holds, and why.
+
+    `unverifiable` reasons keep the link (holds=True). Dropped links use
+    value_changed or partner_changed. `kept` counters include unverifiable rows.
+    """
 
     holds: bool
     reason: str
@@ -65,14 +71,13 @@ def matching_changes(before: SourceRecord, after: SourceRecord) -> dict[str, dic
     return changes
 
 
-KNOWN_EVIDENCE_FIELDS = frozenset({"domain", "linkedin", "name_normalized", "city"})
-
-
 def _known_field(field: str) -> bool:
-    return field in KNOWN_EVIDENCE_FIELDS or field.startswith(EXTERNAL_IDS_PREFIX)
+    if field in KNOWN_EVIDENCE_FIELDS:
+        return True
+    return field.startswith(EXTERNAL_IDS_PREFIX) and len(field) > len(EXTERNAL_IDS_PREFIX)
 
 
-def record_has(
+def _record_has(
     field: str,
     value: str,
     record: SourceRecord,
@@ -88,7 +93,7 @@ def record_has(
             and value.startswith(LINKEDIN_COMPANY_PREFIX)
         )
     if field == "name_normalized":
-        return record.name_normalized == value
+        return bool(record.name_normalized) and record.name_normalized == value
     if field == "city":
         return bool(record.city) and record.city == value
     if field.startswith(EXTERNAL_IDS_PREFIX):
@@ -105,26 +110,36 @@ def _as_rule_entries(evidence: Sequence[Mapping[str, Any]]) -> list[RuleEvidence
     for item in evidence:
         if not isinstance(item, Mapping):
             return None
-        if "decided_by" in item:
+        if MANUAL_EVIDENCE_KEY in item:
             return None
-        required = ("rule", "field", "value", "matched_value", "matched_record_id")
-        if any(key not in item for key in required):
+        if any(key not in item for key in RULE_EVIDENCE_KEYS):
             return None
-        entries.append(item)  # type: ignore[arg-type]
-    return entries or None
+        if any(not isinstance(item[key], str) for key in RULE_EVIDENCE_KEYS):
+            return None
+        entries.append(cast(RuleEvidence, item))
+    return entries
 
 
-def _partner_has(
-    field: str,
-    matched_value: str,
+def _partner_supports(
+    entries: Sequence[RuleEvidence],
     members: Sequence[SourceRecord],
     excluded_domains: frozenset[str],
     self_id: UUID,
 ) -> bool:
+    """True when some other member carries every evidence matched_value, or none exist.
+
+    Multi-entry rules (name_city) need one partner that satisfies all entries together.
+    """
     others = [member for member in members if member.id != self_id]
     if not others:
         return True
-    return any(record_has(field, matched_value, member, excluded_domains) for member in others)
+    return any(
+        all(
+            _record_has(entry["field"], entry["matched_value"], member, excluded_domains)
+            for entry in entries
+        )
+        for member in others
+    )
 
 
 def evidence_holds(
@@ -137,7 +152,7 @@ def evidence_holds(
     """Decide whether automatic-link evidence still holds for `record`.
 
     Self side: every entry's value is still on this record and eligible.
-    Partner side: another current member carries each matched_value, or there is no
+    Partner side: one other current member carries every matched_value, or there is no
     other member to contradict. Empty or malformed evidence is kept as unverifiable.
     """
     if link_method not in AUTOMATIC_LINK_METHODS:
@@ -147,17 +162,15 @@ def evidence_holds(
     if entries is None:
         return LinkVerdict(holds=True, reason=REASON_UNVERIFIABLE)
 
-    member_list = tuple(members)
     for entry in entries:
         field = entry["field"]
         rule = entry["rule"]
-        if rule not in AUTOMATIC_LINK_METHODS or not _known_field(field):
+        if rule != link_method or not _known_field(field):
             return LinkVerdict(holds=True, reason=REASON_UNVERIFIABLE)
-        if not record_has(field, entry["value"], record, excluded_domains):
+        if not _record_has(field, entry["value"], record, excluded_domains):
             return LinkVerdict(holds=False, reason=REASON_VALUE_CHANGED)
-        if not _partner_has(
-            field, entry["matched_value"], member_list, excluded_domains, record.id
-        ):
-            return LinkVerdict(holds=False, reason=REASON_PARTNER_CHANGED)
+
+    if not _partner_supports(entries, tuple(members), excluded_domains, record.id):
+        return LinkVerdict(holds=False, reason=REASON_PARTNER_CHANGED)
 
     return LinkVerdict(holds=True, reason=REASON_HOLDS)

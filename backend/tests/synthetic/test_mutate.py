@@ -269,11 +269,15 @@ def test_value_changes_key_locale_lists_by_locale():
 
 
 def test_linkedin_removed_clears_every_locale_and_stays_valid():
+    # Arrange
     tenants = OmerloFixtureGenerator(SEED, SMALL).generate()
+
+    # Act
     after, diff = mutate(
         tenants, MutationSet("x", "", (Edit("organizations", ("linkedin_removed",)),))
     )
 
+    # Assert
     for data in after:
         for entry in diff["tenants"][data.tenant.slug]["modified"]:
             record = by_id(data, "organizations")[entry["id"]]
@@ -284,6 +288,7 @@ def test_linkedin_removed_clears_every_locale_and_stays_valid():
 
 
 def test_paired_edit_only_touches_duplicate_pairs():
+    # Arrange
     tenants = OmerloFixtureGenerator(SEED, SMALL).generate()
     paired = {
         record_id
@@ -292,8 +297,10 @@ def test_paired_edit_only_touches_duplicate_pairs():
         for record_id in pair["record_ids"]
     }
 
+    # Act
     after, diff = mutate(tenants, RECHECK_DOMAIN)
 
+    # Assert
     for data in after:
         for entry in diff["tenants"][data.tenant.slug]["modified"]:
             assert entry["id"] in paired
@@ -302,12 +309,15 @@ def test_paired_edit_only_touches_duplicate_pairs():
 
 @pytest.mark.parametrize("mutation_set", [RECHECK_DOMAIN, RECHECK_LINKEDIN, RECHECK_RENAME])
 def test_recheck_sets_are_deterministic_and_schema_valid(mutation_set):
+    # Arrange
     first_before = OmerloFixtureGenerator(SEED, SMALL).generate()
     second_before = OmerloFixtureGenerator(SEED, SMALL).generate()
 
+    # Act
     first_after, first_diff = mutate(first_before, mutation_set)
     second_after, second_diff = mutate(second_before, mutation_set)
 
+    # Assert
     assert first_diff == second_diff
     assert [tenant.resources for tenant in first_after] == [
         tenant.resources for tenant in second_after
@@ -318,14 +328,9 @@ def test_recheck_sets_are_deterministic_and_schema_valid(mutation_set):
     assert sum(len(t["modified"]) for t in first_diff["tenants"].values()) >= 1
 
 
-def test_demo_set_is_unchanged_by_paired_flag():
-    first = OmerloFixtureGenerator(SEED, SMALL).generate()
-    second = OmerloFixtureGenerator(SEED, SMALL).generate()
-
-    _, first_diff = mutate(first, DEMO)
-    _, second_diff = mutate(second, DEMO)
-
-    assert first_diff == second_diff
+def test_demo_edits_are_not_paired():
+    # Act / Assert
+    assert all(not step.paired for step in DEMO.steps if isinstance(step, Edit))
 
 
 # ------------------------------------------------------------- files, reset

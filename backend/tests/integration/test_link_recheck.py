@@ -86,6 +86,7 @@ def link_snapshot(link: OrgLink) -> tuple:
 
 
 def test_changed_domain_drops_new_link_and_keeps_old(session):
+    # Arrange
     tenant, run, mapped, records = setup_records(
         session, [{"domain": "exemple.ca"}, {"domain": "exemple.ca"}]
     )
@@ -95,11 +96,13 @@ def test_changed_domain_drops_new_link_and_keeps_old(session):
     old_link = link_snapshot(session.get(OrgLink, old_a.id))
     follow = next_run(session, run)
 
+    # Act
     result = upsert_records(session, follow, [replace(mapped[0], domain="other.ca"), mapped[1]])
     rechecked = recheck_links(session, follow, result.carried)
     session.expire_all()
     current = current_by_external(session, tenant.id)
 
+    # Assert
     assert rechecked == RecheckResult(
         checked=1, kept=0, dropped=1, unverifiable=0, dropped_ids=(current["0"].id,)
     )
@@ -110,6 +113,7 @@ def test_changed_domain_drops_new_link_and_keeps_old(session):
 
 
 def test_attribute_only_change_does_not_recheck(session):
+    # Arrange
     tenant, run, mapped, records = setup_records(
         session, [{"domain": "exemple.ca"}, {"domain": "exemple.ca"}]
     )
@@ -117,6 +121,7 @@ def test_attribute_only_change_does_not_recheck(session):
     before = link_snapshot(session.get(OrgLink, records[0].id))
     follow = next_run(session, run)
 
+    # Act
     result = upsert_records(
         session, follow, [replace(mapped[0], attributes={"note": "x"}), mapped[1]]
     )
@@ -124,17 +129,20 @@ def test_attribute_only_change_does_not_recheck(session):
     session.expire_all()
     current = current_by_external(session, tenant.id)
 
+    # Assert
     assert rechecked == RecheckResult()
     assert link_snapshot(session.get(OrgLink, current["0"].id)) == before
 
 
 def test_rename_on_domain_link_is_kept(session):
+    # Arrange
     tenant, run, mapped, _records = setup_records(
         session, [{"domain": "exemple.ca"}, {"domain": "exemple.ca"}]
     )
     match_organizations(session, tenant.id)
     follow = next_run(session, run)
 
+    # Act
     result = upsert_records(
         session,
         follow,
@@ -144,11 +152,13 @@ def test_rename_on_domain_link_is_kept(session):
     session.expire_all()
     current = current_by_external(session, tenant.id)
 
+    # Assert
     assert rechecked.checked == 1 and rechecked.kept == 1 and rechecked.dropped == 0
     assert session.get(OrgLink, current["0"].id) is not None
 
 
 def test_manual_link_survives_domain_change(session):
+    # Arrange
     tenant, run, mapped, records = setup_records(
         session, [{"domain": "exemple.ca"}, {"domain": "other.ca"}]
     )
@@ -169,17 +179,20 @@ def test_manual_link_survives_domain_change(session):
     session.flush()
     follow = next_run(session, run)
 
+    # Act
     result = upsert_records(session, follow, [replace(mapped[0], domain="changed.ca"), mapped[1]])
     rechecked = recheck_links(session, follow, result.carried)
     session.expire_all()
     current = current_by_external(session, tenant.id)
 
+    # Assert
     assert rechecked == RecheckResult()
     copied = session.get(OrgLink, current["0"].id)
     assert copied.method == "manual" and copied.organization_id == organization.id
 
 
 def test_empty_evidence_automatic_link_is_unverifiable_keep(session):
+    # Arrange
     tenant, run, mapped, records = setup_records(
         session, [{"domain": "exemple.ca"}, {"domain": "other.ca"}]
     )
@@ -200,16 +213,19 @@ def test_empty_evidence_automatic_link_is_unverifiable_keep(session):
     session.flush()
     follow = next_run(session, run)
 
+    # Act
     result = upsert_records(session, follow, [replace(mapped[0], domain="changed.ca"), mapped[1]])
     rechecked = recheck_links(session, follow, result.carried)
     session.expire_all()
     current = current_by_external(session, tenant.id)
 
+    # Assert
     assert rechecked == RecheckResult(checked=1, kept=1, dropped=0, unverifiable=1)
     assert session.get(OrgLink, current["0"].id) is not None
 
 
 def test_members_as_of_keeps_history_after_drop(session):
+    # Arrange
     tenant, run, mapped, records = setup_records(
         session, [{"domain": "exemple.ca"}, {"domain": "exemple.ca"}]
     )
@@ -217,12 +233,14 @@ def test_members_as_of_keeps_history_after_drop(session):
     org_id = session.get(OrgLink, records[0].id).organization_id
     before = {record.id for record in members_as_of(session, tenant.id, org_id, START)}
     assert before == {records[0].id, records[1].id}
-
     follow = next_run(session, run)
+
+    # Act
     result = upsert_records(session, follow, [replace(mapped[0], domain="other.ca"), mapped[1]])
     recheck_links(session, follow, result.carried)
     session.expire_all()
 
+    # Assert
     assert {record.id for record in members_as_of(session, tenant.id, org_id, START)} == before
     after = members_as_of(session, tenant.id, org_id, NEXT)
     assert {record.external_id for record in after} == {"1"}
@@ -230,6 +248,7 @@ def test_members_as_of_keeps_history_after_drop(session):
 
 
 def test_empty_organization_contract_when_both_members_leave(session):
+    # Arrange
     tenant, run, mapped, records = setup_records(
         session, [{"domain": "exemple.ca"}, {"domain": "exemple.ca"}]
     )
@@ -237,6 +256,7 @@ def test_empty_organization_contract_when_both_members_leave(session):
     org_id = session.get(OrgLink, records[0].id).organization_id
     follow = next_run(session, run)
 
+    # Act
     result = upsert_records(
         session,
         follow,
@@ -245,6 +265,7 @@ def test_empty_organization_contract_when_both_members_leave(session):
     rechecked = recheck_links(session, follow, result.carried)
     session.expire_all()
 
+    # Assert
     assert rechecked.dropped == 2
     assert session.get(Organization, org_id) is not None
     assert current_records(session, tenant.id, org_id) == []
@@ -262,6 +283,7 @@ def test_empty_organization_contract_when_both_members_leave(session):
 
 
 def test_members_as_of_unknown_org_and_other_tenant_are_empty(session):
+    # Arrange
     tenant, _, _, records = setup_records(session, [{"domain": "exemple.ca"}] * 2)
     match_organizations(session, tenant.id)
     org_id = session.get(OrgLink, records[0].id).organization_id
@@ -269,11 +291,13 @@ def test_members_as_of_unknown_org_and_other_tenant_are_empty(session):
     session.add(other)
     session.flush()
 
+    # Act / Assert
     assert members_as_of(session, tenant.id, UUID(int=999), START) == []
     assert members_as_of(session, other.id, org_id, START) == []
 
 
 def test_old_link_row_is_byte_for_byte_unchanged(session):
+    # Arrange
     tenant, run, mapped, records = setup_records(
         session, [{"domain": "exemple.ca"}, {"domain": "exemple.ca"}]
     )
@@ -282,8 +306,10 @@ def test_old_link_row_is_byte_for_byte_unchanged(session):
     snapshot = link_snapshot(old)
     follow = next_run(session, run)
 
+    # Act
     result = upsert_records(session, follow, [replace(mapped[0], domain="other.ca"), mapped[1]])
     recheck_links(session, follow, result.carried)
     session.expire_all()
 
+    # Assert
     assert link_snapshot(session.get(OrgLink, records[0].id)) == snapshot
