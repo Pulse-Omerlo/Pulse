@@ -86,7 +86,7 @@ def test_three_record_chain_becomes_one_new_cluster():
     assert plan.candidates == ()
     (cluster,) = plan.clusters
     assert cluster.members == {A, B, C} and cluster.organization_id is None
-    assert cluster.changed and cluster.merged == ()
+    assert cluster.merged == ()
     assert [(link.record_id, link.neighbor) for link in cluster.new_links] == [
         (A, B),
         (B, A),
@@ -236,7 +236,7 @@ def test_rejected_pair_is_never_joined_through_a_third_record():
     assert [cluster.members for cluster in plan.clusters] == [{A, B}]
 
 
-def test_unchanged_organization_is_not_marked_changed():
+def test_unchanged_organization_needs_no_link_changes():
     # Arrange
     items = members(Member(A, domain="exemple.ca"), Member(B, domain="exemple.ca"))
     links = {A: LinkFacts(ORG_1), B: LinkFacts(ORG_1)}
@@ -244,7 +244,8 @@ def test_unchanged_organization_is_not_marked_changed():
     plan = plan_clusters(items, [edge(A, B, "domain"), edge(A, B, "name_only")], links)
     # Assert
     assert plan.candidates == ()
-    assert not plan.clusters[0].changed
+    cluster = plan.clusters[0]
+    assert (cluster.merged, cluster.new_links, cluster.repointed) == ((), (), ())
 
 
 def test_edges_to_unknown_records_are_ignored():
@@ -270,7 +271,14 @@ def test_member_drops_generic_domains_and_person_profiles():
     # Act
     member = member_from_record(record, frozenset({"gmail.com"}))
     # Assert
-    assert member == Member(A, "exemple", None, None, frozenset({("crm", "7")}), when)
+    assert member == Member(
+        A,
+        name=None,
+        name_normalized="exemple",
+        external_id="42",
+        external_ids=frozenset({("crm", "7")}),
+        updated=when,
+    )
 
 
 def test_external_ids_ignore_bad_entries_but_preserve_case():
@@ -375,7 +383,7 @@ def test_link_still_on_a_merged_organization_is_repointed():
     # Assert
     (cluster,) = plan.clusters
     assert cluster.organization_id == ORG_1 and cluster.repointed == (A,)
-    assert cluster.merged == () and cluster.changed
+    assert cluster.merged == ()
 
 
 def test_lone_record_on_a_merged_organization_is_repointed():
@@ -407,3 +415,26 @@ def test_organization_with_a_manual_link_on_a_closed_version_is_not_merged():
     # Assert
     assert [e.rule for e in plan.candidates] == ["domain"]
     assert all(not c.merged for c in plan.clusters)
+
+
+def test_manual_organization_keeps_its_display_values():
+    # Arrange
+    items = members(Member(A, name="Exemple", domain="exemple.ca"), Member(B, name="Other"))
+    links = {A: LinkFacts(ORG_1, manual=True)}
+    # Act
+    plan = plan_clusters(items, [edge(A, B, "domain")], links)
+    # Assert
+    assert (plan.clusters[0].display_name, plan.clusters[0].primary_domain) == (None, None)
+
+
+def test_existing_organization_gets_display_values_even_without_link_changes():
+    # Arrange
+    items = members(Member(A, name="New name", domain="new.ca"), Member(B, name="New name"))
+    links = {A: LinkFacts(ORG_1), B: LinkFacts(ORG_1)}
+    # Act
+    plan = plan_clusters(items, [], links)
+    # Assert
+    assert (plan.clusters[0].display_name, plan.clusters[0].primary_domain) == (
+        "New name",
+        "new.ca",
+    )

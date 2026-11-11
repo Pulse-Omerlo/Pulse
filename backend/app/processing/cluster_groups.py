@@ -124,9 +124,11 @@ class Group:
 class Groups:
     """A union-find over records with the summary of each group kept at its root."""
 
-    def __init__(self, groups: Mapping[UUID, Group]) -> None:
+    def __init__(self, groups: Mapping[UUID, Group], manual: frozenset[UUID]) -> None:
         self.sets = DisjointSet(sorted(groups))
         self._groups = dict(groups)
+        # Organizations with a manual link in any version.
+        self.manual = manual
 
     def root(self, record_id: UUID) -> UUID:
         return self.sets.find(record_id)

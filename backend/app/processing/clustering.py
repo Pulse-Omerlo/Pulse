@@ -19,7 +19,10 @@ class Member:
     """The fields of one current record that clustering looks at."""
 
     id: UUID
+    # attributes["name"] only; the fallbacks are separate fields.
     name: str | None = None
+    name_normalized: str | None = None
+    external_id: str | None = None
     # Non-generic domain and company LinkedIn URL only.
     domain: str | None = None
     linkedin: str | None = None
@@ -57,14 +60,11 @@ class Cluster:
     organization_id: UUID | None
     merged: tuple[UUID, ...]
     new_links: tuple[NewLink, ...]
+    # None means keep the stored value: a manual organization keeps both.
     display_name: str | None
     primary_domain: str | None
     # Linked members whose stored link names another organization than this one.
     repointed: tuple[UUID, ...] = ()
-
-    @property
-    def changed(self) -> bool:
-        return self.organization_id is None or bool(self.merged or self.new_links or self.repointed)
 
 
 @dataclass(frozen=True)
@@ -105,7 +105,9 @@ def organization_domain(record: SourceRecord, generic_domains: frozenset[str]) -
 def member_from_record(record: SourceRecord, generic_domains: frozenset[str]) -> Member:
     return Member(
         id=record.id,
-        name=(record.attributes or {}).get("name") or record.name_normalized or record.external_id,
+        name=(record.attributes or {}).get("name") or None,
+        name_normalized=record.name_normalized,
+        external_id=record.external_id,
         domain=organization_domain(record, generic_domains),
         linkedin=company_linkedin(record),
         external_ids=frozenset(external_keys(record)),
@@ -149,12 +151,15 @@ def _new_links(
 def _cluster(
     members: Mapping[UUID, Member],
     links: Mapping[UUID, LinkFacts],
+    manual: frozenset[UUID],
     group: frozenset[UUID],
     edges: Sequence[MatchCandidateData],
 ) -> Cluster:
     counts = Counter(links[r].organization_id for r in group if r in links)
     survivor = choose_survivor(counts) if counts else None
-    name, domain = choose_display_values(members[r] for r in sorted(group))
+    name, domain = None, None
+    if survivor not in manual:
+        name, domain = choose_display_values(members[r] for r in sorted(group))
     return Cluster(
         members=group,
         organization_id=survivor,
@@ -198,7 +203,7 @@ def _initial_groups(
             bool(organizations & manual),
             frozenset(rejected_by.get(record_id, ())),
         )
-    groups = Groups(summaries)
+    groups = Groups(summaries, frozenset(manual))
     for record_ids in _by_organization(links, members).values():
         for record_id in record_ids[1:]:
             groups.join(record_ids[0], record_id)
@@ -244,7 +249,7 @@ def plan_clusters(
     for edge in kept:
         edges_by_root[groups.root(edge.left)].append(edge)
     clusters = tuple(
-        _cluster(members, links, group, edges_by_root[min(group)])
+        _cluster(members, links, groups.manual, group, edges_by_root[min(group)])
         for group in groups.sets.groups()
         if len(group) > 1 or group & links.keys()
     )

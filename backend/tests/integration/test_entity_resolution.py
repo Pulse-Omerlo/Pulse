@@ -552,3 +552,60 @@ def test_manual_link_on_a_removed_record_still_protects_its_organization(session
     assert result == MatchResult(0, 1, 1, 0)
     assert session.get(Organization, other.id).merged_into is None
     assert session.get(Organization, reviewed.organization_id).merged_into is None
+
+
+def test_reviewers_name_is_kept_on_every_run(session):
+    # Arrange
+    tenant, _, _, records = setup_records(
+        session, [{"domain": "exemple.ca", "attributes": {"name": "Exemple"}}] * 2
+    )
+    link = manual_link(session, records[0])
+    organization = session.get(Organization, link.organization_id)
+    # Act
+    first = match_organizations(session, tenant.id)
+    second = match_organizations(session, tenant.id)
+    session.expire_all()
+    # Assert
+    assert (first, second) == (MatchResult(0, 1, 0), MatchResult())
+    assert (organization.display_name, organization.primary_domain) == ("Verified company", None)
+
+
+def test_renamed_members_rename_their_organization_but_keep_its_domain(session):
+    # Arrange
+    tenant, run, mapped, records = setup_records(
+        session, [{"domain": "exemple.ca", "attributes": {"name": "Old name"}}] * 2
+    )
+    match_organizations(session, tenant.id)
+    organization = session.get(Organization, session.get(OrgLink, records[0].id).organization_id)
+    next_run = SyncRun(
+        tenant_id=tenant.id, source_id=run.source_id, started_at=START + timedelta(days=1)
+    )
+    session.add(next_run)
+    session.flush()
+    renamed = [replace(item, domain=None, attributes={"name": "New name"}) for item in mapped]
+    upsert_records(session, next_run, renamed)
+    # Act
+    result = match_organizations(session, tenant.id)
+    session.expire_all()
+    # Assert
+    assert result == MatchResult()
+    assert (organization.display_name, organization.primary_domain) == ("New name", "exemple.ca")
+
+
+def test_weak_match_inside_one_organization_is_not_set_aside(session):
+    # Arrange: the same name in two cities, both already in one organization.
+    tenant, _, _, records = setup_records(
+        session,
+        [
+            {"name_normalized": "exemple", "city": "quebec"},
+            {"name_normalized": "exemple", "city": "montreal"},
+        ],
+    )
+    rule_link(session, records)
+    # Act
+    result = match_organizations(session, tenant.id)
+    # Assert
+    assert result == MatchResult()
+    assert (
+        session.scalar(select(MatchCandidate).where(MatchCandidate.tenant_id == tenant.id)) is None
+    )

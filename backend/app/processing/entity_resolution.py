@@ -361,8 +361,11 @@ def _apply(run: _Run, cluster: Cluster) -> None:
         run.links[record_id].organization_id = organization.id
     for new_link in cluster.new_links:
         _add_link(run, new_link, organization.id)
-    organization.display_name = cluster.display_name or organization.display_name
-    organization.primary_domain = cluster.primary_domain
+    # A value is only written when it changes, and never replaced by nothing.
+    if cluster.display_name and cluster.display_name != organization.display_name:
+        organization.display_name = cluster.display_name
+    if cluster.primary_domain and cluster.primary_domain != organization.primary_domain:
+        organization.primary_domain = cluster.primary_domain
 
 
 # Function to match organizations for a given tenant, used to create organizations and links based
@@ -400,8 +403,7 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
             _manual_organizations(session, tenant_id),
         )
         for cluster in plan.clusters:
-            if cluster.changed:
-                _apply(run, cluster)
+            _apply(run, cluster)
         for match in plan.candidates:
             _add_candidate(run, match)
 
