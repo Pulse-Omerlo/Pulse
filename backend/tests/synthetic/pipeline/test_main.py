@@ -5,12 +5,14 @@ from synthetic.pipeline.__main__ import (
     EXIT_AUTH,
     EXIT_REFUSED,
     EXIT_REJECTIONS,
+    EXIT_STOPPED,
     main,
     parse_args,
 )
 from synthetic.pipeline.mixer import load_mix
 from synthetic.pipeline.plan import build_plan
 from synthetic.pipeline.target import load_target
+from synthetic.pipeline.writers.base import WriteRejected
 from synthetic.pipeline.writers.fake import FakeWriter
 
 MIX = """
@@ -118,3 +120,22 @@ def test_the_default_output_folder_leaves_the_demo_fixtures_alone():
     # Assert
     assert args.out.name == "mixes"
     assert args.out.parent.name == "out"
+
+
+def test_a_stopped_run_prints_what_was_done_and_exits_with_four(tmp_path, capsys):
+    # Arrange
+    writer = staging_writer()
+
+    def refuse(kind, record_id, entries):
+        raise WriteRejected("metadata.key is invalid", 400)
+
+    writer.set_metadata = refuse
+
+    # Act
+    code = main(["--mix", mix_file(tmp_path), "--sink", "omerlo"], writer=writer)
+
+    # Assert
+    assert code == EXIT_STOPPED
+    captured = capsys.readouterr()
+    assert "rejected    1" in captured.out
+    assert "tag or delete it before running again" in captured.err

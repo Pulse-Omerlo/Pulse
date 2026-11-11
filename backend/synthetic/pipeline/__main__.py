@@ -19,7 +19,7 @@ from app.ingestion.omerlo.settings import OmerloSettings
 from synthetic.pipeline.mixer import MixError, load_mix
 from synthetic.pipeline.plan import build_plan
 from synthetic.pipeline.sinks.files import write_files
-from synthetic.pipeline.sinks.omerlo import OmerloSink, TenantGuardError
+from synthetic.pipeline.sinks.omerlo import OmerloSink, RunStopped, TenantGuardError
 from synthetic.pipeline.target import DEFAULT_TARGET, Target, load_target
 from synthetic.pipeline.writers.api import ApiWriter
 from synthetic.pipeline.writers.base import OmerloWriter
@@ -32,6 +32,7 @@ DEFAULT_OUT = Path(__file__).resolve().parent.parent / "out" / "mixes"
 EXIT_REJECTIONS = 1
 EXIT_REFUSED = 2
 EXIT_AUTH = 3
+EXIT_STOPPED = 4
 
 
 def make_writer(kind: str, target: Target, cli_command: str | None) -> OmerloWriter:
@@ -84,6 +85,10 @@ def main(argv: list[str] | None = None, writer: OmerloWriter | None = None) -> i
         print(sink.report.format())
         print(f"Stopped: {error}", file=sys.stderr)
         return EXIT_AUTH
+    except RunStopped as error:
+        print(sink.report.format())
+        print(f"Stopped: {error}", file=sys.stderr)
+        return EXIT_STOPPED
     print(report.format())
     return EXIT_REJECTIONS if report.rejections else 0
 

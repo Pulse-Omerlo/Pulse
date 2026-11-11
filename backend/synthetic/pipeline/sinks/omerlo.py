@@ -28,6 +28,10 @@ class TenantGuardError(Exception):
     """The target does not look like the configured test tenant; nothing was written."""
 
 
+class RunStopped(Exception):
+    """A failure every later record would hit too; the run stops so it does no more harm."""
+
+
 def check_host(base_url: str) -> None:
     host = urlsplit(base_url).hostname or ""
     if host in PRODUCTION_HOSTS:
@@ -144,7 +148,12 @@ class OmerloSink:
         except WriteRejected as error:
             reason = f"created as {record_id} but its metadata was refused: {error}"
             self.report.reject(kind, external_id, reason)
-            return None
+            # Without its external id the record is invisible to the next run, which would
+            # create it again; stop before more records end up the same way.
+            raise RunStopped(
+                f"Omerlo refused the metadata of {record_id} ({error}). The record exists "
+                "without its external id: tag or delete it before running again."
+            ) from error
         counts.created += 1
         return record_id
 

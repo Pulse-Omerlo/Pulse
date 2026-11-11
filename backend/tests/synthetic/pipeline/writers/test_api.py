@@ -163,3 +163,19 @@ def test_listing_reads_records_and_metadata(writer):
     assert writer.list_workspaces() == [{"id": "ws-1"}]
     assert writer.list_records("people", "ws-1") == [{"id": "p-1"}]
     assert writer.get_metadata("people", "p-1") == [{"key": "k", "value": "v"}]
+
+
+@respx.mock
+def test_staging_validation_errors_are_spelled_out(writer):
+    # Arrange
+    body = {
+        "status": 400,
+        "errors": {"metadata": [{"key": ["is invalid"]}, {"key": ["is invalid"]}]},
+    }
+    respx.put(f"{BASE}/community/v2/organizations/o-1/metadata").mock(
+        return_value=httpx.Response(400, json=body)
+    )
+
+    # Act / Assert
+    with pytest.raises(WriteRejected, match=r"^400 metadata\.key is invalid$"):
+        writer.set_metadata("organizations", "o-1", [])

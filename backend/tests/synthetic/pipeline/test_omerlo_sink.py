@@ -6,7 +6,7 @@ import pytest
 
 from app.ingestion.omerlo.client import OmerloAuthError
 from synthetic.pipeline.plan import EXTERNAL_ID_KEY
-from synthetic.pipeline.sinks.omerlo import OmerloSink, TenantGuardError
+from synthetic.pipeline.sinks.omerlo import OmerloSink, RunStopped, TenantGuardError
 from synthetic.pipeline.writers.base import ORGANIZATIONS, PEOPLE, WriteRejected
 from tests.synthetic.pipeline.conftest import TENANT_ID, WORKSPACE_ID
 
@@ -117,21 +117,24 @@ def test_people_of_a_refused_organization_are_not_linked(writer, target, plan):
     assert report.counts["links"].created == len(plan.people) - len(staff)
 
 
-def test_refused_metadata_is_reported_with_the_id_of_the_created_record(
-    writer, target, plan, monkeypatch
-):
+def test_refused_metadata_stops_the_run_after_the_first_record(writer, target, plan, monkeypatch):
     # Arrange
     def refuse(kind, record_id, entries):
-        raise WriteRejected("metadata is locked", 409)
+        raise WriteRejected("metadata.key is invalid", 400)
 
     monkeypatch.setattr(writer, "set_metadata", refuse)
+    sink = OmerloSink(writer, target, sleep=lambda _: None)
 
     # Act
-    report = run(writer, target, replace(plan, people=[]))
+    with pytest.raises(RunStopped, match="exists without its external id"):
+        sink.run(plan)
 
     # Assert
-    assert report.counts[ORGANIZATIONS].created == 0
-    assert "but its metadata was refused: 409 metadata is locked" in report.rejections[0].reason
+    assert len(writer.records[ORGANIZATIONS]) == 1
+    assert writer.records[PEOPLE] == {}
+    assert "but its metadata was refused: 400 metadata.key is invalid" in (
+        sink.report.rejections[0].reason
+    )
 
 
 def test_a_second_run_creates_nothing(writer, target, plan):

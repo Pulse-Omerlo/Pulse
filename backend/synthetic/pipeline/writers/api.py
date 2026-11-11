@@ -16,6 +16,28 @@ from app.ingestion.omerlo.pagination import paginate
 from synthetic.pipeline.writers.base import PEOPLE, WriteRejected
 
 
+def field_errors(errors: Any, path: str = "") -> list[str]:
+    """Flatten Omerlo's validation errors: {"metadata": [{"key": ["is invalid"]}]}."""
+    if isinstance(errors, dict):
+        return [m for k, v in errors.items() for m in field_errors(v, f"{path}.{k}" if path else k)]
+    if isinstance(errors, list) and all(isinstance(e, str) for e in errors):
+        return [f"{path} {', '.join(errors)}"]
+    if isinstance(errors, list):
+        return [m for e in errors for m in field_errors(e, path)]
+    return [f"{path} {errors}"]
+
+
+def rejection_message(response: httpx.Response) -> str:
+    """The `error` string, or the `errors` object staging sends for validation failures."""
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and body.get("errors"):
+        return "; ".join(dict.fromkeys(field_errors(body["errors"])))
+    return error_message(response)
+
+
 class ApiWriter:
     def __init__(self, client: httpx.Client):
         self.client = client
@@ -70,5 +92,5 @@ class ApiWriter:
             message = "the API key lacks the role for this resource (HTTP 403)"
             raise OmerloAuthError(f"{path}: {message}")
         if response.is_error:
-            raise WriteRejected(error_message(response), response.status_code)
+            raise WriteRejected(rejection_message(response), response.status_code)
         return read_json(response, path)
