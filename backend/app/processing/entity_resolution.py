@@ -24,17 +24,22 @@ from app.processing.clustering import (
     organization_domain,
     plan_clusters,
 )
+from app.processing.fuzzy_config import FuzzyConfig
+from app.processing.fuzzy_matching import fuzzy_matches
 
 # Rule names stay importable from here for existing callers.
 from app.processing.match_rules import RULE_PRIORITIES as RULE_PRIORITIES
+from app.processing.match_rules import RULE_VERSION as RULE_VERSION
+from app.processing.match_rules import RULE_WEIGHTS as RULE_WEIGHTS
 from app.processing.match_rules import (
-    RULE_VERSION,
     MatchCandidateData,
     Pair,
-    rule_weight,
+    candidate_score,
+    decided_by,
+    link_confidence,
+    rule_set_version,
     strength_key,
 )
-from app.processing.match_rules import RULE_WEIGHTS as RULE_WEIGHTS
 
 # Get the domains from the config file
 GENERIC_DOMAINS_PATH = Path(__file__).with_name("generic_domains.toml")
@@ -180,19 +185,39 @@ def blocked_matches(
     return sorted(matches, key=strength_key)
 
 
+def fuzzy_edges(
+    records: Iterable[SourceRecord],
+    excluded_domains: frozenset[str],
+    tier1: Iterable[MatchCandidateData],
+    config: FuzzyConfig | None = None,
+) -> list[MatchCandidateData]:
+    """Tier 2 matches for the pairs Tier 1 did not classify."""
+    known = {match.providePair for match in tier1}
+    return [
+        MatchCandidateData(m.left, m.right, m.rule, m.fields, m.score, m.sides)
+        for m in fuzzy_matches(records, excluded_domains, known, config)
+    ]
+
+
 # Function to generate evidence for a match candidate, used to provide context for the matching
 # decision
 def evidence(match: MatchCandidateData, matched_record_id: UUID) -> list[RuleEvidence]:
+    # Sides are written from this record's point of view: its value first.
+    from_left = matched_record_id == match.right
+    values = [(field, value, value) for field, value in match.fields] + [
+        (field, left, right) if from_left else (field, right, left)
+        for field, left, right in match.sides
+    ]
     return [
         {
             "rule": match.rule,
-            "rule_set_version": RULE_VERSION,
+            "rule_set_version": rule_set_version(match.rule),
             "field": field,
             "value": value,
-            "matched_value": value,
+            "matched_value": matched_value,
             "matched_record_id": str(matched_record_id),
         }
-        for field, value in match.fields
+        for field, value, matched_value in values
     ]
 
 
@@ -289,7 +314,7 @@ def _add_candidate(run: _Run, match: MatchCandidateData) -> None:
         tenant_id=run.tenant_id,
         left_record_id=left,
         right_record_id=right,
-        score=rule_weight(match.rule),
+        score=candidate_score(match),
         matched_fields=evidence(match, match.right),
         status="pending",
     )
@@ -331,8 +356,8 @@ def _add_link(run: _Run, new_link: NewLink, organization_id: UUID) -> None:
         source_record_id=new_link.record_id,
         organization_id=organization_id,
         method=match.rule,
-        confidence=rule_weight(match.rule),
-        decided_by=f"tier1:{RULE_VERSION}",
+        confidence=link_confidence(match),
+        decided_by=decided_by(match),
         evidence=evidence(match, new_link.neighbor),
     )
     run.session.add(link)
@@ -383,6 +408,7 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
 
         generic_domains = load_generic_domains()
         matches = blocked_matches(records.values(), generic_domains)
+        matches += fuzzy_edges(records.values(), generic_domains, matches)
         plan = plan_clusters(
             {key: member_from_record(record, generic_domains) for key, record in records.items()},
             matches,
