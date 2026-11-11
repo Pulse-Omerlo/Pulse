@@ -19,6 +19,7 @@ from app.models.resolution import RuleEvidence
 # If we need to change matching behavior later, we can create a new version and keep the old one for
 # reference
 RULE_VERSION = "tier1-v1"
+LINKEDIN_COMPANY_PREFIX = "company/"
 
 # Priority of strong matching rules (Left = Highest priotity, Right = Lowest priority)
 # Uses the highest priority rule that matches to make a decision, and ignores any lower priority
@@ -134,7 +135,7 @@ def blocking_keys(
     if record.domain and record.domain not in excluded_domains:
         yield "domain", record.domain
     # A person's LinkedIn profile cannot identify an organization.
-    if record.linkedin and record.linkedin.startswith("company/"):
+    if record.linkedin and record.linkedin.startswith(LINKEDIN_COMPANY_PREFIX):
         yield "linkedin", record.linkedin
     for namespace, value in sorted(external_keys(record)):
         yield "external_id", namespace, value
@@ -170,7 +171,9 @@ def classify_pair(
         return MatchCandidateData(left.id, right.id, "domain", (("domain", left.domain),))
     if (
         # Match LinkedIn profile
-        left.linkedin and left.linkedin.startswith("company/") and left.linkedin == right.linkedin
+        left.linkedin
+        and left.linkedin.startswith(LINKEDIN_COMPANY_PREFIX)
+        and left.linkedin == right.linkedin
     ):
         return MatchCandidateData(left.id, right.id, "linkedin", (("linkedin", left.linkedin),))
     # Match external identifiers using set intersection to find shared identifiers
@@ -255,7 +258,7 @@ def conflicting_identifiers(records: Iterable[SourceRecord]) -> bool:
     external = defaultdict(list)
 
     for record in records:
-        if record.linkedin and record.linkedin.startswith("company/"):
+        if record.linkedin and record.linkedin.startswith(LINKEDIN_COMPANY_PREFIX):
             linkedin.add(record.linkedin)
 
         by_namespace = defaultdict(set)
