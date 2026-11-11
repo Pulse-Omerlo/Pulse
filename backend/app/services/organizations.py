@@ -48,13 +48,26 @@ def surviving_organization_id(
 ) -> UUID | None:
     """The id an organization now goes by after merges, or None if the tenant has no such id."""
     with bound_to_tenant(session, tenant_id):
-        seen = set()
-        while organization_id not in seen:
-            seen.add(organization_id)
-            organization = session.get(Organization, organization_id)
-            if organization is None:
-                return None
-            if organization.merged_into is None:
-                return organization.id
-            organization_id = organization.merged_into
-        raise ValueError(f"Organization {organization_id} is merged in a loop")
+        organization = surviving_organization(session, tenant_id, organization_id)
+    return organization.id if organization else None
+
+
+def surviving_organization(
+    session: Session,
+    tenant_id: UUID,
+    organization_id: UUID,
+) -> Organization | None:
+    """The organization an id now stands for after merges, or None if the tenant has no such id.
+
+    Uses the caller's tenant scope and checks tenant_id itself on top of it.
+    """
+    seen = set()
+    while organization_id not in seen:
+        seen.add(organization_id)
+        organization = session.get(Organization, organization_id)
+        if organization is None or organization.tenant_id != tenant_id:
+            return None
+        if organization.merged_into is None:
+            return organization
+        organization_id = organization.merged_into
+    raise ValueError(f"Organization {organization_id} is merged in a loop")

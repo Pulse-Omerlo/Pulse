@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, aliased
 
 from app.core.errors import NotFoundError
 from app.models import MatchCandidate, Organization, OrgLink, RecordChange, SourceRecord, SyncRun
+from app.services.organizations import surviving_organization
 from app.services.pagination import Paging
 
 ORGANIZATION_SORTS = ("name", "records", "last_changed")
@@ -129,20 +130,10 @@ def get_organization(
     session: Session, tenant_id: uuid.UUID, organization_id: uuid.UUID
 ) -> Organization:
     """The organization, or the one it was merged into, so an old id still resolves."""
-    seen = set()
-    while organization_id not in seen:
-        seen.add(organization_id)
-        organization = session.scalar(
-            select(Organization).where(
-                Organization.tenant_id == tenant_id, Organization.id == organization_id
-            )
-        )
-        if organization is None:
-            raise NotFoundError("Organization not found")
-        if organization.merged_into is None:
-            return organization
-        organization_id = organization.merged_into
-    raise ValueError(f"Organization {organization_id} is merged in a loop")
+    organization = surviving_organization(session, tenant_id, organization_id)
+    if organization is None:
+        raise NotFoundError("Organization not found")
+    return organization
 
 
 def linked_records(

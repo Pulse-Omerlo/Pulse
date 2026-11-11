@@ -55,3 +55,10 @@ def test_merge_loop_is_reported(session):
         surviving_organization_id(session, TENANT, OLD)
     # Assert
     assert "loop" in str(error.value)
+
+
+def test_an_id_of_another_tenant_resolves_to_none(session):
+    # Arrange
+    organizations(session, Organization(id=OLD, tenant_id=UUID(int=200)))
+    # Act / Assert
+    assert surviving_organization_id(session, TENANT, OLD) is None
