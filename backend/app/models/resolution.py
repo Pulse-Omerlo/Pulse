@@ -8,7 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, json_column, one_of, same_tenant_fk, tenant_id_column, uuid_pk
 
-LINK_METHODS = ("domain", "linkedin", "external_id", "name_city", "manual")
+LINK_METHODS = ("domain", "linkedin", "external_id", "name_city", "fuzzy", "manual")
 CANDIDATE_STATUSES = ("pending", "accepted", "rejected")
 
 
