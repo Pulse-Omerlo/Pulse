@@ -213,4 +213,14 @@ describe("SyncRunsPage", () => {
     // Assert
     expect(await screen.findByRole("alert")).toHaveTextContent("temporarily unavailable");
   });
+
+  it("shows events and people as not available yet", async () => {
+    // Arrange
+    render(<SyncRunsPage />);
+
+    // Act / Assert
+    expect(await screen.findByRole("button", { name: "Events" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "People" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Organizations" })).toBeEnabled();
+  });
 });

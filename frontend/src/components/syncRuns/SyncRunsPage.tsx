@@ -95,20 +95,38 @@ export function SyncRunsPage() {
           </select>
         </label>
         <div className="filters" role="group" aria-label="View">
-          {(["runs", "organizations"] as const).map((name) => (
+          <button
+            type="button"
+            aria-pressed={view === "runs"}
+            className={view === "runs" ? "filter active" : "filter"}
+            onClick={() => {
+              setView("runs");
+              setHistory(null);
+            }}
+          >
+            Sync runs
+          </button>
+          <span className="flow" aria-label="Events contain organizations, which contain people">
+            <button type="button" className="filter" disabled title="Coming soon">
+              Events
+            </button>
+            <span aria-hidden="true">›</span>
             <button
-              key={name}
               type="button"
-              aria-pressed={view === name}
-              className={view === name ? "filter active" : "filter"}
+              aria-pressed={view === "organizations"}
+              className={view === "organizations" ? "filter active" : "filter"}
               onClick={() => {
-                setView(name);
+                setView("organizations");
                 setHistory(null);
               }}
             >
-              {name === "runs" ? "Sync runs" : "Organizations"}
+              Organizations
             </button>
-          ))}
+            <span aria-hidden="true">›</span>
+            <button type="button" className="filter" disabled title="Coming soon">
+              People
+            </button>
+          </span>
         </div>
         <form onSubmit={search} role="search">
           <input

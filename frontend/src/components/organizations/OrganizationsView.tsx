@@ -56,6 +56,11 @@ export function OrganizationsView({ tenantId, onOpenRecord }: OrganizationsViewP
           </button>
         </div>
         {selected.primary_domain && <p className="muted">{selected.primary_domain}</p>}
+        <div className="filters">
+          <button type="button" className="filter" disabled title="Coming soon">
+            People
+          </button>
+        </div>
 
         <h3>Source records</h3>
         <ul className="change-list">

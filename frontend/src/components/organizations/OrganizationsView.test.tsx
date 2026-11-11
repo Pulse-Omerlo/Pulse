@@ -118,6 +118,17 @@ describe("OrganizationsView", () => {
     expect(getOrganization).toHaveBeenCalledWith("t1", "org1");
   });
 
+  it("shows people in an organization as not available yet", async () => {
+    // Arrange
+    render(<OrganizationsView tenantId="t1" onOpenRecord={vi.fn()} />);
+
+    // Act
+    fireEvent.click(await screen.findByRole("button", { name: "Groupe Tremblay inc." }));
+
+    // Assert
+    expect(await screen.findByRole("button", { name: "People" })).toBeDisabled();
+  });
+
   it("opens the source record of an organization that matched no other", async () => {
     // Arrange
     const onOpenRecord = vi.fn();
