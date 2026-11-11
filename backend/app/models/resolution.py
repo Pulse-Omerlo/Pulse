@@ -36,12 +36,20 @@ class Organization(Base):
     """What PULSE believes is one real-world organization."""
 
     __tablename__ = "organization"
-    __table_args__ = (UniqueConstraint("tenant_id", "id"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id"),
+        same_tenant_fk("merged_into", "organization"),
+        CheckConstraint("merged_into IS NULL OR merged_into <> id", name="not_merged_into_itself"),
+        # Organizations merged into this one, so an old id resolves; indexes the foreign key.
+        Index("ix_organization_merged_into", "tenant_id", "merged_into"),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     tenant_id: Mapped[uuid.UUID] = tenant_id_column()
     display_name: Mapped[str] = mapped_column(Text)
     primary_domain: Mapped[str | None] = mapped_column(Text)
+    # The organization this one was merged into; null while it is still in use.
+    merged_into: Mapped[uuid.UUID | None]
 
 
 class OrgLink(Base):

@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, aliased
 
 from app.core.errors import NotFoundError
 from app.models import MatchCandidate, Organization, OrgLink, RecordChange, SourceRecord, SyncRun
+from app.services.organizations import surviving_organization
 from app.services.pagination import Paging
 
 ORGANIZATION_SORTS = ("name", "records", "last_changed")
@@ -128,11 +129,8 @@ def list_organizations(
 def get_organization(
     session: Session, tenant_id: uuid.UUID, organization_id: uuid.UUID
 ) -> Organization:
-    organization = session.scalar(
-        select(Organization).where(
-            Organization.tenant_id == tenant_id, Organization.id == organization_id
-        )
-    )
+    """The organization, or the one it was merged into, so an old id still resolves."""
+    organization = surviving_organization(session, tenant_id, organization_id)
     if organization is None:
         raise NotFoundError("Organization not found")
     return organization
