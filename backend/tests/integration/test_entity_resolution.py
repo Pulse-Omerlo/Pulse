@@ -103,7 +103,7 @@ def test_rules_save_links_and_rerunning_creates_nothing(session, fields, method)
     second = match_organizations(session, tenant.id)
     links = [session.get(OrgLink, record.id) for record in records]
     # Assert
-    assert first == MatchResult(1, 2, 0) and second == MatchResult()
+    assert first == MatchResult(1, 2, 0, 1) and second == MatchResult()
     assert links[0].organization_id == links[1].organization_id
     for record, link in zip(records, links, strict=True):
         assert link.method == method and 0 < link.confidence <= 1
@@ -122,7 +122,7 @@ def test_manual_link_is_reused_without_overwriting_its_evidence(session):
     result = match_organizations(session, tenant.id)
     session.expire_all()
     # Assert
-    assert result == MatchResult(0, 1, 0)
+    assert result == MatchResult(0, 1, 0, 1)
     assert (original.organization_id, original.evidence, original.decided_at) == snapshot
     assert original.method == "manual" and original.decided_by == "reviewer"
     assert session.get(OrgLink, records[1].id).organization_id == original.organization_id
@@ -269,6 +269,6 @@ def test_caller_can_roll_back_all_matching_writes(session):
     result = match_organizations(session, tenant.id)
     transaction.rollback()
     # Assert
-    assert result == MatchResult(1, 2, 0)
+    assert result == MatchResult(1, 2, 0, 1)
     assert all(session.get(OrgLink, record.id) is None for record in records)
     assert session.scalar(select(Organization).where(Organization.tenant_id == tenant.id)) is None

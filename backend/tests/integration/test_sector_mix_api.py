@@ -6,11 +6,11 @@
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from app.api.browse import database
 from app.main import app
-from app.models import IndustryClassification, SourceRecord, Tenant
+from app.models import IndustryClassification, OrgLink, SourceRecord, Tenant
 from synthetic.mutate import DEMO, apply_set
 from tests.integration.test_sync_runs import (  # noqa: F401
     SLUG,
@@ -46,19 +46,19 @@ def test_a_sync_stores_a_mix_whose_figures_add_up(api, session, source, sync):
     mix = api.get(f"/api/tenants/{source.tenant_id}/sector-mix").json()
 
     # Assert
-    current = session.scalar(
-        select(func.count(SourceRecord.id)).where(
-            SourceRecord.kind == "organization", SourceRecord.valid_to.is_(None)
+    rows = session.execute(
+        select(OrgLink.organization_id, SourceRecord.id, IndustryClassification.primary_sector)
+        .outerjoin(OrgLink, OrgLink.source_record_id == SourceRecord.id)
+        .outerjoin(
+            IndustryClassification, IndustryClassification.source_record_id == SourceRecord.id
         )
-    )
-    classified = session.scalar(
-        select(func.count(IndustryClassification.source_record_id)).where(
-            IndustryClassification.status == "classified"
-        )
-    )
+        .where(SourceRecord.kind == "organization", SourceRecord.valid_to.is_(None))
+    ).all()
+    # The sync matches duplicates, so a matched organization counts once.
+    organizations = {organization or record for organization, record, _ in rows}
+    classified = {organization or record for organization, record, sector in rows if sector}
     assert mix["sync_run_id"] == str(run.id)
-    # Nothing is matched by the sync itself yet, so each record is one organization.
-    assert (mix["organizations"], mix["classified"]) == (current, classified)
+    assert (mix["organizations"], mix["classified"]) == (len(organizations), len(classified))
     counted = sum(s["organization_count"] for s in mix["sectors"])
     assert counted + len(mix["unclassified"]) == mix["organizations"]
     assert sum(s["organization_share"] for s in mix["sectors"]) == pytest.approx(100, abs=1)

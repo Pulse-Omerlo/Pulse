@@ -20,8 +20,10 @@ from app.core.errors import NotFoundError
 from app.core.tenancy import bound_to_tenant
 from app.ingestion.omerlo.connector import OmerloConnector
 from app.main import app
-from app.models import Source, SourceRecord, SyncRun, Tenant
-from app.services import browse, record_changes, source_records
+from app.models import Organization, Source, SourceRecord, SyncRun, Tenant
+from app.processing.entity_resolution import match_organizations
+from app.services import browse, organization_views, record_changes, source_records
+from app.services.pagination import Paging
 from app.services.sync_runs import OmerloReader, run_sync
 from app.storage.raw_records import read_run
 from tests.integration.test_sync_runs import (  # noqa: F401
@@ -40,6 +42,11 @@ TENANT_ROUTES = {
     "/api/tenants/{tenant_id}/runs/{run_id}/changes",
     "/api/tenants/{tenant_id}/records",
     "/api/tenants/{tenant_id}/records/{source_id}/{external_id}",
+    "/api/tenants/{tenant_id}/organizations",
+    "/api/tenants/{tenant_id}/organizations/{organization_id}",
+    "/api/tenants/{tenant_id}/organizations/{organization_id}/timeline",
+    "/api/tenants/{tenant_id}/duplicates/candidates",
+    "/api/tenants/{tenant_id}/duplicates/groups",
     "/api/tenants/{tenant_id}/sector-mix",
     "/api/tenants/{tenant_id}/runs/{run_id}/sector-mix",
 }
@@ -68,6 +75,9 @@ def synced(session, mock_app, archive) -> dict[str, Synced]:
             reader = OmerloReader(OmerloConnector(client))
             run = run_sync(session, source, reader, archive, full=True, now=clock)
         assert run.status == "succeeded"
+        with bound_to_tenant(session, tenant.id):
+            match_organizations(session, tenant.id)
+            session.commit()
         ids = set(
             session.scalars(
                 select(SourceRecord.external_id).where(SourceRecord.tenant_id == tenant.id)
@@ -115,7 +125,7 @@ def test_runs_list_only_the_readers_runs(api, pair):
     reader, _ = pair
 
     # Act
-    runs = api.get(f"/api/tenants/{reader.tenant.id}/runs").json()
+    runs = api.get(f"/api/tenants/{reader.tenant.id}/runs").json()["items"]
 
     # Assert
     assert [r["id"] for r in runs] == [str(reader.run.id)]
@@ -128,6 +138,69 @@ def test_another_tenants_run_is_not_found(api, pair):
 
     # Act
     response = api.get(f"/api/tenants/{reader.tenant.id}/runs/{other.run.id}/changes")
+
+    # Assert
+    assert response.status_code == 404
+
+
+def organization_of(session, synced: Synced) -> uuid.UUID:
+    return session.scalars(
+        select(Organization.id).where(Organization.tenant_id == synced.tenant.id)
+    ).first()
+
+
+def record_sources(items: list[dict]) -> set[str]:
+    """Source ids of every record reference in a page of organizations or candidates."""
+    refs = []
+    for item in items:
+        refs += [item[k] for k in ("record", "left", "right") if item.get(k)]
+        # A group lists its records; a list item only counts them.
+        if isinstance(item.get("records"), list):
+            refs += [linked["record"] for linked in item["records"]]
+    return {ref["source_id"] for ref in refs}
+
+
+@pytest.mark.parametrize("path", ["organizations", "duplicates/candidates", "duplicates/groups"])
+def test_organization_lists_hold_only_the_readers_records(api, session, pair, path):
+    # Arrange
+    reader, other = pair
+    others = {
+        str(i)
+        for i in session.scalars(
+            select(Organization.id).where(Organization.tenant_id == other.tenant.id)
+        )
+    }
+
+    # Act
+    page = api.get(f"/api/tenants/{reader.tenant.id}/{path}", params={"page_size": 100}).json()
+
+    # Assert
+    assert record_sources(page["items"]) <= {str(reader.source.id)}
+    ids = {item.get("organization_id") or item.get("id") for item in page["items"]}
+    assert not ids & others
+
+
+def test_organization_lists_are_not_empty(api, pair):
+    # Arrange
+    reader, _ = pair
+
+    # Act
+    organizations = api.get(f"/api/tenants/{reader.tenant.id}/organizations").json()
+    groups = api.get(f"/api/tenants/{reader.tenant.id}/duplicates/groups").json()
+
+    # Assert
+    assert organizations["total"] > 0
+    assert groups["total"] > 0
+
+
+@pytest.mark.parametrize("suffix", ["", "/timeline"])
+def test_another_tenants_organization_is_not_found(api, session, pair, suffix):
+    # Arrange
+    reader, other = pair
+    guessed = organization_of(session, other)
+
+    # Act
+    response = api.get(f"/api/tenants/{reader.tenant.id}/organizations/{guessed}{suffix}")
 
     # Assert
     assert response.status_code == 404
@@ -195,7 +268,7 @@ def test_browse_services_see_nothing_of_the_other_tenant(session, pair):
 
     # Act / Assert
     with bound_to_tenant(session, reader.tenant.id):
-        assert browse.list_runs(session, tenant_id) == []
+        assert browse.list_runs(session, tenant_id) == ([], 0)
         assert browse.search_records(session, tenant_id) == []
         assert browse.run_order(session, {other.run.id}) == {}
         assert browse.list_tenants(session) == [reader.tenant]
@@ -205,6 +278,19 @@ def test_browse_services_see_nothing_of_the_other_tenant(session, pair):
             browse.run_changes(session, tenant_id, other.run.id)
         with pytest.raises(NotFoundError):
             browse.record_history(session, tenant_id, other.source.id, guessed)
+        organization_id = organization_of(session, other)
+        page = Paging()
+        assert organization_views.list_organizations(session, tenant_id, page) == ([], 0)
+        assert organization_views.linked_records(session, tenant_id, [organization_id]) == {
+            organization_id: []
+        }
+        assert organization_views.organization_timeline(
+            session, tenant_id, organization_id, page
+        ) == ([], 0)
+        assert organization_views.match_candidates(session, tenant_id, page) == ([], 0)
+        assert organization_views.matched_groups(session, tenant_id, page) == ([], 0)
+        with pytest.raises(NotFoundError):
+            organization_views.get_organization(session, tenant_id, organization_id)
 
 
 def test_sync_services_see_nothing_of_the_other_tenant(session, pair, archive):
