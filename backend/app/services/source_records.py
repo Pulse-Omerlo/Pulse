@@ -71,6 +71,8 @@ class UpsertResult:
     added: list[str] = field(default_factory=list)
     changed: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
+    # (previous version id, new version id) pairs that received copied links.
+    carried: list[tuple[uuid.UUID, uuid.UUID]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -115,6 +117,7 @@ def upsert_records(
         result.added += plan.result.added
         result.changed += plan.result.changed
         result.unchanged += plan.result.unchanged
+        result.carried += plan.carried
     return result
 
 
