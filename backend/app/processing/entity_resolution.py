@@ -1,72 +1,47 @@
 # AI contribution: Below 50% AI-generated
 import tomllib
-from collections import defaultdict, deque
+from collections import defaultdict
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from itertools import combinations
 from pathlib import Path
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import case, select, update
+from sqlalchemy.orm import Session, aliased
 
 from app.core.tenancy import bound_to_tenant
 from app.models import MatchCandidate, Organization, OrgLink, SourceRecord, Tenant
 from app.models.resolution import RuleEvidence
 
-# Naming the version of the matching rules used to make a decision
-# If we need to change matching behavior later, we can create a new version and keep the old one for
-# reference
-RULE_VERSION = "tier1-v1"
-LINKEDIN_COMPANY_PREFIX = "company/"
-
-# Priority of strong matching rules (Left = Highest priotity, Right = Lowest priority)
-# Uses the highest priority rule that matches to make a decision, and ignores any lower priority
-# rules that also match
-RULE_PRIORITIES = ("domain", "linkedin", "external_id", "name_city")
-
-# Dictionnary assigning a weight to each matching rule, used to compute a score for each match
-# candidate
-RULE_WEIGHTS = {
-    "domain": 1.0,
-    "linkedin": 1.0,
-    "external_id": 1.0,
-    "name_city": 0.95,
-    "name_only": 0.5,
-}
+# Rule names and the LinkedIn prefix stay importable from here for existing callers.
+from app.processing.clustering import LINKEDIN_COMPANY_PREFIX as LINKEDIN_COMPANY_PREFIX
+from app.processing.clustering import (
+    Cluster,
+    LinkFacts,
+    NewLink,
+    company_linkedin,
+    external_keys,
+    member_from_record,
+    organization_domain,
+    plan_clusters,
+)
+from app.processing.match_rules import RULE_PRIORITIES as RULE_PRIORITIES
+from app.processing.match_rules import (
+    RULE_VERSION,
+    MatchCandidateData,
+    Pair,
+    rule_weight,
+    strength_key,
+)
+from app.processing.match_rules import RULE_WEIGHTS as RULE_WEIGHTS
 
 # Get the domains from the config file
 GENERIC_DOMAINS_PATH = Path(__file__).with_name("generic_domains.toml")
 
-# Tupple containing the two record version IDs
-Pair = tuple[UUID, UUID]
 # Blocking key for a match candidate, used to group match candidates by the fields that matched
 Key = tuple[str, ...]
-# Inner tupples containing the field name and value for each matching field
-Fields = tuple[tuple[str, str], ...]
-
-
-# Class for a match candidate, containing the two record version IDs and the matching rule that
-# matched them
-@dataclass(frozen=True)
-class MatchCandidateData:
-    left: UUID
-    right: UUID
-    rule: str
-    fields: Fields
-
-    @property
-    def providePair(self) -> Pair:
-        """Return the pair of record version IDs in a consistent order."""
-        return (self.left, self.right) if self.left < self.right else (self.right, self.left)
-
-    # Distinguish rules that are strong enough to be used for automatic resolution from those that
-    # are not
-    # If other weak rules are added in the future, this property can be updated to reflect that
-    @property
-    def strong(self) -> bool:
-        return self.rule != "name_only"
 
 
 # Class for the result of a match resolution, containing the number of organizations, links, and
@@ -81,7 +56,7 @@ class MatchResult:
     links_created: int = 0
     # Counts new pairs set aside for review.
     candidates_created: int = 0
-    # Counts organizations, new or existing, that gained linked records.
+    # Counts organizations merged into another one.
     organizations_merged: int = 0
 
 
@@ -104,39 +79,18 @@ def load_generic_domains() -> frozenset[str]:
     return frozenset(value.strip().lower() for value in values)
 
 
-# Function to extract external keys from a source record, used to identify matches based on external
-# identifiers
-def external_keys(record: SourceRecord) -> set[tuple[str, str]]:
-    result = set()
-    for namespace, values in (record.external_ids or {}).items():
-        # Skip invalid namespaces or values. This is to avoid matching on invalid external
-        # identifiers which are not useful for matching.
-        if not isinstance(namespace, str) or not namespace.strip():
-            continue
-        # Skip invalid values. This is to avoid matching on invalid external identifiers which are
-        # not useful for matching.
-        if not isinstance(values, list):
-            continue
-        for value in values:
-            # The goal is that the matcher can find shared identifiers using set intersection
-            if isinstance(value, str) and value.strip():
-                result.add((namespace.strip(), value.strip()))
-    return result
-
-
 # Produces a sequence of blocking keys for a record, used to group records by the fields that match
 # AI Generated
 def blocking_keys(
     record: SourceRecord,
     excluded_domains: frozenset[str],
 ) -> Iterable[Key]:
-    # A domain is a strong identifier for an organization, but generic domains are not useful for
-    # matching.
-    if record.domain and record.domain not in excluded_domains:
-        yield "domain", record.domain
-    # A person's LinkedIn profile cannot identify an organization.
-    if record.linkedin and record.linkedin.startswith(LINKEDIN_COMPANY_PREFIX):
-        yield "linkedin", record.linkedin
+    domain = organization_domain(record, excluded_domains)
+    if domain:
+        yield "domain", domain
+    linkedin = company_linkedin(record)
+    if linkedin:
+        yield "linkedin", linkedin
     for namespace, value in sorted(external_keys(record)):
         yield "external_id", namespace, value
     if record.name_normalized:
@@ -164,18 +118,14 @@ def classify_pair(
     ):
         return None
     left, right = sorted((left, right), key=lambda record: record.id)
-    if (
-        # Match domain
-        left.domain and left.domain == right.domain and left.domain not in excluded_domains
-    ):
-        return MatchCandidateData(left.id, right.id, "domain", (("domain", left.domain),))
-    if (
-        # Match LinkedIn profile
-        left.linkedin
-        and left.linkedin.startswith(LINKEDIN_COMPANY_PREFIX)
-        and left.linkedin == right.linkedin
-    ):
-        return MatchCandidateData(left.id, right.id, "linkedin", (("linkedin", left.linkedin),))
+    # Match domain
+    domain = organization_domain(left, excluded_domains)
+    if domain and domain == right.domain:
+        return MatchCandidateData(left.id, right.id, "domain", (("domain", domain),))
+    # Match company LinkedIn page
+    linkedin = company_linkedin(left)
+    if linkedin and linkedin == right.linkedin:
+        return MatchCandidateData(left.id, right.id, "linkedin", (("linkedin", linkedin),))
     # Match external identifiers using set intersection to find shared identifiers
     shared_ids = external_keys(left) & external_keys(right)
     if shared_ids:
@@ -228,11 +178,7 @@ def blocked_matches(
         if match:
             matches.append(match)
 
-    order = (*RULE_PRIORITIES, "name_only")
-    return sorted(
-        matches,
-        key=lambda match: (order.index(match.rule), match.left, match.right),
-    )
+    return sorted(matches, key=strength_key)
 
 
 # Function to generate evidence for a match candidate, used to provide context for the matching
@@ -251,78 +197,211 @@ def evidence(match: MatchCandidateData, matched_record_id: UUID) -> list[RuleEvi
     ]
 
 
-# Function to check for conflicting identifiers in a group of records, used to prevent merging
-# records with contradictory information
-def conflicting_identifiers(records: Iterable[SourceRecord]) -> bool:
-    linkedin = set()
-    external = defaultdict(list)
-
-    for record in records:
-        if record.linkedin and record.linkedin.startswith(LINKEDIN_COMPANY_PREFIX):
-            linkedin.add(record.linkedin)
-
-        by_namespace = defaultdict(set)
-        for namespace, value in external_keys(record):
-            by_namespace[namespace].add(value)
-        for namespace, values in by_namespace.items():
-            external[namespace].append(values)
-
-    if len(linkedin) > 1:
-        return True
-
-    # Multiple aliases are allowed when the sets retain a common ID.
-    return any(not set.intersection(*values) for values in external.values() if len(values) > 1)
+# State of one matching run: the rows it loaded and what it wrote so far.
+@dataclass
+class _Run:
+    session: Session
+    tenant_id: UUID
+    links: dict[UUID, OrgLink]
+    decisions: dict[Pair, MatchCandidate]
+    organizations: dict[UUID, Organization]
+    # Organization merged in this run -> the one it was merged into.
+    merges: dict[UUID, UUID] = field(default_factory=dict)
+    result: MatchResult = field(default_factory=MatchResult)
 
 
-# Function to find connected components in a graph of matches, used to group records that are
-# strongly connected by matching rules
-# AI Assisted
-def components(matches: Iterable[MatchCandidateData]) -> list[set[UUID]]:
-    graph = defaultdict(set)
-    for match in matches:
-        if match.strong:
-            graph[match.left].add(match.right)
-            graph[match.right].add(match.left)
-
-    groups = []
-    remaining = set(graph)
-    while remaining:
-        queue = [min(remaining)]
-        group = set()
-        while queue:
-            record_id = queue.pop()
-            if record_id in group:
-                continue
-            group.add(record_id)
-            queue.extend(graph[record_id] - group)
-        remaining -= group
-        groups.append(group)
-    return groups
+def _current_records(session: Session, tenant_id: UUID) -> dict[UUID, SourceRecord]:
+    query = (
+        select(SourceRecord)
+        .where(
+            SourceRecord.tenant_id == tenant_id,
+            SourceRecord.kind == "organization",
+            SourceRecord.valid_to.is_(None),
+        )
+        .order_by(SourceRecord.id)
+    )
+    return {record.id: record for record in session.scalars(query)}
 
 
-# Function to check if one of the record ids is in changed_ids
-# When changed_ids is None, every record counts as changed
+def _current_links(session: Session, tenant_id: UUID) -> dict[UUID, OrgLink]:
+    # Joining current records avoids loading historical link versions.
+    query = (
+        select(OrgLink)
+        .join(SourceRecord, SourceRecord.id == OrgLink.source_record_id)
+        .where(
+            OrgLink.tenant_id == tenant_id,
+            SourceRecord.tenant_id == tenant_id,
+            SourceRecord.kind == "organization",
+            SourceRecord.valid_to.is_(None),
+        )
+    )
+    return {link.source_record_id: link for link in session.scalars(query)}
+
+
+def _decisions(session: Session, tenant_id: UUID) -> dict[Pair, MatchCandidate]:
+    """Candidates between two current organization records; older versions are skipped."""
+    left, right = aliased(SourceRecord), aliased(SourceRecord)
+    query = (
+        select(MatchCandidate)
+        .join(left, left.id == MatchCandidate.left_record_id)
+        .join(right, right.id == MatchCandidate.right_record_id)
+        .where(
+            MatchCandidate.tenant_id == tenant_id,
+            *(
+                condition
+                for record in (left, right)
+                for condition in (
+                    record.tenant_id == tenant_id,
+                    record.kind == "organization",
+                    record.valid_to.is_(None),
+                )
+            ),
+        )
+    )
+    return {
+        (candidate.left_record_id, candidate.right_record_id): candidate
+        for candidate in session.scalars(query)
+    }
+
+
+def _manual_organizations(session: Session, tenant_id: UUID) -> set[UUID]:
+    """Organizations with a manual link on any version, current or not."""
+    query = (
+        select(OrgLink.organization_id)
+        .where(OrgLink.tenant_id == tenant_id, OrgLink.method == "manual")
+        .distinct()
+    )
+    return set(session.scalars(query))
+
+
+def _organizations(session: Session, tenant_id: UUID, ids: set[UUID]) -> dict[UUID, Organization]:
+    """The linked organizations, plus the ones they were merged into."""
+    found = {}
+    while ids:
+        query = select(Organization).where(
+            Organization.tenant_id == tenant_id, Organization.id.in_(sorted(ids))
+        )
+        found |= {organization.id: organization for organization in session.scalars(query)}
+        ids = {o.merged_into for o in found.values() if o.merged_into} - found.keys()
+    return found
+
+
+def _link_facts(run: _Run) -> dict[UUID, LinkFacts]:
+    facts = {}
+    for record_id, link in run.links.items():
+        organization = run.organizations.get(link.organization_id)
+        target = organization.merged_into if organization and organization.merged_into else None
+        facts[record_id] = LinkFacts(
+            target or link.organization_id,
+            manual=link.method == "manual",
+            stored_organization_id=link.organization_id if target else None,
+        )
+    return facts
+
+
+def _add_candidate(run: _Run, match: MatchCandidateData) -> None:
+    if match.providePair in run.decisions:
+        return
+    left, right = match.providePair
+    candidate = MatchCandidate(
+        tenant_id=run.tenant_id,
+        left_record_id=left,
+        right_record_id=right,
+        score=rule_weight(match.rule),
+        matched_fields=evidence(match, match.right),
+        status="pending",
+    )
+    run.session.add(candidate)
+    run.decisions[match.providePair] = candidate
+    run.result.candidates_created += 1
+
+
+def _new_organization(run: _Run, cluster: Cluster) -> Organization:
+    organization = Organization(
+        id=uuid4(),
+        tenant_id=run.tenant_id,
+        display_name=cluster.display_name or "",
+        primary_domain=cluster.primary_domain,
+    )
+    run.session.add(organization)
+    # Organization must exist before links reference it.
+    run.session.flush()
+    run.organizations[organization.id] = organization
+    run.result.organizations_created += 1
+    return organization
+
+
+def _merge(run: _Run, merged_id: UUID, survivor_id: UUID) -> None:
+    run.organizations[merged_id].merged_into = survivor_id
+    run.merges[merged_id] = survivor_id
+    run.result.organizations_merged += 1
+
+
+def _repoint_earlier_merges(run: _Run) -> None:
+    """Point organizations merged earlier into one merged in this run at its survivor.
+
+    One statement for the whole run, so merged_into stays one hop.
+    """
+    if not run.merges:
+        return
+    run.session.execute(
+        update(Organization)
+        .where(
+            Organization.tenant_id == run.tenant_id,
+            Organization.merged_into.in_(sorted(run.merges)),
+        )
+        .values(merged_into=case(run.merges, value=Organization.merged_into))
+        .execution_options(synchronize_session="fetch")
+    )
+
+
+def _add_link(run: _Run, new_link: NewLink, organization_id: UUID) -> None:
+    match = new_link.edge
+    link = OrgLink(
+        tenant_id=run.tenant_id,
+        source_record_id=new_link.record_id,
+        organization_id=organization_id,
+        method=match.rule,
+        confidence=rule_weight(match.rule),
+        decided_by=f"tier1:{RULE_VERSION}",
+        evidence=evidence(match, new_link.neighbor),
+    )
+    run.session.add(link)
+    run.links[new_link.record_id] = link
+    run.result.links_created += 1
+
+
+def _apply(run: _Run, cluster: Cluster) -> None:
+    if cluster.organization_id is None:
+        organization = _new_organization(run, cluster)
+    else:
+        organization = run.organizations[cluster.organization_id]
+    for merged_id in cluster.merged:
+        _merge(run, merged_id, organization.id)
+    # Moves the current links of merged organizations; closed versions keep theirs.
+    for record_id in cluster.repointed:
+        run.links[record_id].organization_id = organization.id
+    for new_link in cluster.new_links:
+        _add_link(run, new_link, organization.id)
+    # A value is only written when it changes, and never replaced by nothing.
+    if cluster.display_name and cluster.display_name != organization.display_name:
+        organization.display_name = cluster.display_name
+    if cluster.primary_domain and cluster.primary_domain != organization.primary_domain:
+        organization.primary_domain = cluster.primary_domain
+
+
+# Loads a tenant's current organization records and past decisions, plans the clusters, then
+# creates or merges organizations, links and review candidates in the caller's transaction.
 def has_changed_record(record_ids: Iterable[UUID], changed_ids: set[UUID] | None) -> bool:
-    if changed_ids is None:
-        return True
-    # The two sets share at least one id
-    common_ids = changed_ids & set(record_ids)
-    return len(common_ids) > 0
+    """Whether one of the records changed; with no changed_ids every record counts."""
+    return changed_ids is None or not changed_ids.isdisjoint(record_ids)
 
 
-# Function to match organizations for a given tenant, used to create organizations and links based
-# on the matching rules
-# Overall goal: 1->Load a tenant's current organization records and exisitng decisions, 2->Find
-# matches and connected groups, 3->Check each group for conflicts, 4->Create organizations, links or
-# review candidates as appropriate, 5->Return a summary of the results
-# AI Assisted with debugging and optimization
-# If changed_ids is given, only groups and pairs that contain one of those records are decided.
-# The other current records are still loaded so the changed records can be compared to them.
+# With changed_ids, only clusters and pairs holding one of those records are applied; the other
+# current records are still loaded so the changed ones can be compared to them.
 def match_organizations(
     session: Session, tenant_id: UUID, changed_ids: set[UUID] | None = None
 ) -> MatchResult:
-    # Load the tenant's current organization records and existing decisions, and lock the tenant row
-    # to prevent concurrent matching for the same tenant.
     with bound_to_tenant(session, tenant_id):
         # Serialize matcher invocations for this tenant.
         tenant = session.scalar(select(Tenant).where(Tenant.id == tenant_id).with_for_update())
@@ -330,182 +409,42 @@ def match_organizations(
             raise ValueError(f"Unknown tenant {tenant_id}")
 
         session.flush()
-        records = {
-            record.id: record
-            for record in session.scalars(
-                select(SourceRecord)
-                .where(
-                    SourceRecord.tenant_id == tenant_id,
-                    SourceRecord.kind == "organization",
-                    SourceRecord.valid_to.is_(None),
-                )
-                .order_by(SourceRecord.id)
-            )
-        }
+        records = _current_records(session, tenant_id)
+        links = _current_links(session, tenant_id)
+        run = _Run(
+            session=session,
+            tenant_id=tenant_id,
+            links=links,
+            decisions=_decisions(session, tenant_id),
+            organizations=_organizations(
+                session, tenant_id, {link.organization_id for link in links.values()}
+            ),
+        )
 
-        # Joining current records avoids loading historical link versions.
-        links = {
-            link.source_record_id: link
-            for link in session.scalars(
-                select(OrgLink)
-                .join(SourceRecord, SourceRecord.id == OrgLink.source_record_id)
-                .where(
-                    OrgLink.tenant_id == tenant_id,
-                    SourceRecord.tenant_id == tenant_id,
-                    SourceRecord.kind == "organization",
-                    SourceRecord.valid_to.is_(None),
-                )
-            )
-        }
-        decisions = {
-            (candidate.left_record_id, candidate.right_record_id): candidate
-            for candidate in session.scalars(
-                select(MatchCandidate).where(
-                    MatchCandidate.tenant_id == tenant_id,
-                )
-            )
-            if candidate.left_record_id in records and candidate.right_record_id in records
-        }
-
-        matches = blocked_matches(records.values(), load_generic_domains())
-        organizations_created = links_created = candidates_created = 0
-        # Organizations that received at least one new link
-        merged_organization_ids = set()
-
-        def add_candidate(match: MatchCandidateData) -> None:
-            nonlocal candidates_created
-            if match.providePair in decisions:
-                return
-
-            candidate = MatchCandidate(
-                tenant_id=tenant_id,
-                left_record_id=match.left,
-                right_record_id=match.right,
-                score=RULE_WEIGHTS[match.rule],
-                matched_fields=evidence(match, match.right),
-                status="pending",
-            )
-            session.add(candidate)
-            decisions[match.providePair] = candidate
-            candidates_created += 1
-
-        for group in components(matches):
-            if not has_changed_record(group, changed_ids):
-                continue
-            edges = [
-                match
-                for match in matches
-                if match.strong and match.left in group and match.right in group
-            ]
-            organization_ids = {
-                links[record_id].organization_id for record_id in group if record_id in links
-            }
-            rejected = any(
-                left in group and right in group and candidate.status == "rejected"
-                for (left, right), candidate in decisions.items()
-            )
-
-            # Include current members of an existing organization when checking
-            # contradictions, even if they have no direct edge to this group.
-            members = group | {
-                record_id
-                for record_id, link in links.items()
-                if link.organization_id in organization_ids
-            }
-            unsafe = (
-                rejected
-                or len(organization_ids) > 1
-                or conflicting_identifiers(records[key] for key in members)
-            )
-            if unsafe:
-                for match in edges:
-                    add_candidate(match)
-                continue
-
-            if organization_ids:
-                organization_id = next(iter(organization_ids))
-            else:
-                first = records[min(group)]
-                organization_id = uuid4()
-                session.add(
-                    Organization(
-                        id=organization_id,
-                        tenant_id=tenant_id,
-                        display_name=(
-                            (first.attributes or {}).get("name")
-                            or first.name_normalized
-                            or first.external_id
-                        ),
-                        primary_domain=(
-                            first.domain if first.domain not in load_generic_domains() else None
-                        ),
-                    )
-                )
-                # Organization must exist before links reference it.
-                session.flush()
-                organizations_created += 1
-
-            adjacency = defaultdict(list)
-            for match in edges:
-                adjacency[match.left].append((match.right, match))
-                adjacency[match.right].append((match.left, match))
-
-            # Start with existing members, preserving their decisions.
-            roots = sorted(group & links.keys())
-            queue = deque(roots or [min(group)])
-            visited = set(queue)
-
-            while queue:
-                record_id = queue.popleft()
-                for neighbor, match in adjacency[record_id]:
-                    if neighbor in visited:
-                        continue
-
-                    if record_id not in links:
-                        link = OrgLink(
-                            tenant_id=tenant_id,
-                            source_record_id=record_id,
-                            organization_id=organization_id,
-                            method=match.rule,
-                            confidence=RULE_WEIGHTS[match.rule],
-                            decided_by=f"tier1:{RULE_VERSION}",
-                            evidence=evidence(match, neighbor),
-                        )
-                        session.add(link)
-                        links[record_id] = link
-                        links_created += 1
-                        merged_organization_ids.add(organization_id)
-
-                    if neighbor not in links:
-                        link = OrgLink(
-                            tenant_id=tenant_id,
-                            source_record_id=neighbor,
-                            organization_id=organization_id,
-                            method=match.rule,
-                            confidence=RULE_WEIGHTS[match.rule],
-                            decided_by=f"tier1:{RULE_VERSION}",
-                            evidence=evidence(match, record_id),
-                        )
-                        session.add(link)
-                        links[neighbor] = link
-                        links_created += 1
-                        merged_organization_ids.add(organization_id)
-
-                    visited.add(neighbor)
-                    queue.append(neighbor)
+        generic_domains = load_generic_domains()
+        matches = blocked_matches(records.values(), generic_domains)
+        plan = plan_clusters(
+            {key: member_from_record(record, generic_domains) for key, record in records.items()},
+            matches,
+            _link_facts(run),
+            [pair for pair, decision in run.decisions.items() if decision.status == "rejected"],
+            _manual_organizations(session, tenant_id),
+        )
+        for cluster in plan.clusters:
+            if has_changed_record(cluster.members, changed_ids):
+                _apply(run, cluster)
+        _repoint_earlier_merges(run)
+        for match in plan.candidates:
+            if has_changed_record(match.providePair, changed_ids):
+                _add_candidate(run, match)
 
         for match in matches:
-            if match.strong or not has_changed_record([match.left, match.right], changed_ids):
+            if match.strong or not has_changed_record(match.providePair, changed_ids):
                 continue
-            left, right = links.get(match.left), links.get(match.right)
+            left, right = run.links.get(match.left), run.links.get(match.right)
             if left and right and left.organization_id == right.organization_id:
                 continue
-            add_candidate(match)
+            _add_candidate(run, match)
 
         session.flush()
-        return MatchResult(
-            organizations_created=organizations_created,
-            links_created=links_created,
-            candidates_created=candidates_created,
-            organizations_merged=len(merged_organization_ids),
-        )
+        return run.result

@@ -56,6 +56,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Industry classification of organizations | #149 | |
 | Tenant API for organizations, runs and duplicates | #63 | |
 | Recheck automatic organization links on matching-field change | #110 | |
+| Merging organizations joined by a chain of matches | #108 | |
 | Match people with name plus a secondary identifier | #112 | |
 
 ## Details
@@ -222,6 +223,43 @@ domain, LinkedIn removal and rename. Rematch stays in the existing
 **Verification:** unit tests cover field diffs, evidence verdicts and sync
 wiring. Integration tests against Postgres cover drops, empty organizations,
 as-of membership and unchanged old-version links.
+
+### Merging organizations joined by a chain of matches (#108)
+
+Claude Code wrote the union-find clustering, the conflict check that cuts the
+weakest link of a chain, the survivor and display value rules, and the change
+to `match_organizations` that merges organizations and sets `merged_into`. It
+also wrote the `merged_into` migration, the helper that resolves a merged id,
+and the tests. Treating a rejected pair like a conflict, so the rest of the
+chain still links, was its proposal; the PR lists it under decisions to review.
+
+**Verification:** unit tests in `tests/processing/test_clustering.py` run the
+planner on plain data (a three-record chain, two organizations merged, a
+conflicting chain, a parent and subsidiary sharing a LinkedIn URL, a manual
+organization, a rule outside Tier 1). The integration tests merge real
+organizations on Postgres, roll the merge back, rerun it with no changes and
+check tenant isolation. The Tier 1 report gives the same precision and recall
+as before.
+
+**Problem found:** `blocked_matches` sorted matches with
+`RULE_PRIORITIES.index`, which would have raised on any new rule such as the
+planned `fuzzy` one. It now uses the same sort key as the clustering.
+
+**Problems found in review** (the first generated version had all of these):
+- An organization whose members already disagreed (two domains linked by a
+  reviewer, or a member whose domain changed) could never gain a record, so
+  new matches formed a duplicate organization. Only a disagreement that a join
+  adds is now blocked.
+- A record sharing a domain with two subsidiaries on different LinkedIn pages
+  joined whichever had the smaller id. It now joins neither.
+- A removed record that came back after a merge kept a link to the merged
+  organization. Copying a link now follows `merged_into`.
+- The conflict check rescanned every member on each edge, so 800 records on
+  one domain took minutes to plan.
+- A reviewer's organization name was overwritten, and an external id could
+  win the display name vote over real names.
+- Sites on shared hosts (`x.wixsite.com` keeps only `wixsite.com`) chained
+  unrelated organizations; those hosts are now generic domains.
 
 ### Match people with name plus a secondary identifier (#112)
 

@@ -13,12 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.core.tenancy import bound_to_tenant
 from app.models import MatchCandidate, Person, PersonLink, SourceRecord, Tenant
-from app.processing.entity_resolution import (
-    RULE_VERSION,
-    components,
-    evidence,
-    has_changed_record,
-)
+from app.processing.entity_resolution import RULE_VERSION, evidence, has_changed_record
 
 logger = getLogger(__name__)
 
@@ -222,6 +217,30 @@ def conflicting_person_identifiers(records: Iterable[SourceRecord]) -> bool:
     if len(nonempty) <= 1:
         return False
     return not set.intersection(*nonempty)
+
+
+def components(matches: Iterable[PersonMatch]) -> list[set[UUID]]:
+    """Connected components over strong person edges."""
+    graph: dict[UUID, set[UUID]] = defaultdict(set)
+    for match in matches:
+        if match.strong:
+            graph[match.left].add(match.right)
+            graph[match.right].add(match.left)
+
+    groups: list[set[UUID]] = []
+    remaining = set(graph)
+    while remaining:
+        queue = [min(remaining)]
+        group: set[UUID] = set()
+        while queue:
+            record_id = queue.pop()
+            if record_id in group:
+                continue
+            group.add(record_id)
+            queue.extend(graph[record_id] - group)
+        remaining -= group
+        groups.append(group)
+    return groups
 
 
 def person_display_name(record: SourceRecord) -> str:

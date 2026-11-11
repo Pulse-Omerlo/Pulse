@@ -9,9 +9,13 @@ import pytest
 
 from app import match as command
 from app.core.tenancy import TenantContextError
-from app.models import SourceRecord, Tenant
+from app.models import Organization, SourceRecord, Tenant
 from app.processing import entity_resolution as er
-from app.processing.normalization import normalize_city, normalize_organization_name
+from app.processing.normalization import (
+    normalize_city,
+    normalize_domain,
+    normalize_organization_name,
+)
 from app.services.organizations import current_records
 from app.sync import SyncCommandError
 
@@ -74,22 +78,31 @@ def test_bad_domain_config_is_rejected(domain_file, config):
     assert "non-empty domains list" in str(error.value)
 
 
-def test_external_ids_ignore_bad_entries_but_preserve_case():
-    # Arrange
-    item = record(
-        external_ids={
-            " crm ": [" ABC ", "ABC", "abc", "", None, 12],
-            "neq": ["ABC"],
-            " ": ["bad"],
-            4: ["bad"],
-            "broken": "123",
-        }
-    )
+@pytest.mark.parametrize(
+    "site",
+    [
+        "x.wixsite.com",
+        "x.wordpress.com",
+        "x.blogspot.com",
+        "x.github.io",
+        "x.myshopify.com",
+        "x.square.site",
+        "x.business.site",
+        "sites.google.com/view/x",
+        "linktr.ee/x",
+        "bit.ly/x",
+        "fb.com/x",
+    ],
+)
+def test_shared_hosts_never_match_two_organizations(site):
+    # Arrange: two unrelated sites on the same host keep only the host as their domain.
+    domain = normalize_domain(site)
+    left, right = record(1, domain=domain), record(2, domain=domain)
     # Act
-    keys = er.external_keys(item)
+    match = er.classify_pair(left, right, er.load_generic_domains())
     # Assert
-    assert keys == {("crm", "ABC"), ("crm", "abc"), ("neq", "ABC")}
-    assert er.external_keys(record(external_ids=None)) == set()
+    assert domain in er.load_generic_domains()
+    assert match is None
 
 
 @pytest.mark.parametrize(
@@ -217,47 +230,10 @@ def test_evidence_keeps_both_fields_and_supporting_version():
     assert all(entry["matched_record_id"] == str(match.right) for entry in proof)
 
 
-@pytest.mark.parametrize(
-    ("first", "second", "conflict"),
-    [
-        ({"linkedin": "company/parent"}, {"linkedin": "company/subsidiary"}, True),
-        ({"external_ids": {"neq": ["123"]}}, {"external_ids": {"neq": ["456"]}}, True),
-        ({"external_ids": {"crm": ["old", "123"]}}, {"external_ids": {"crm": ["123"]}}, False),
-        ({"external_ids": {"crm": ["123"]}}, {}, False),
-    ],
-)
-def test_conflicting_ids_and_missing_ids(first, second, conflict):
-    # Arrange
-    records = [record(1, **first), record(2, **second)]
-    # Act
-    result = er.conflicting_identifiers(records)
-    # Assert
-    assert result is conflict
-
-
-def test_components_follow_strong_paths_and_ignore_weak_bridges():
-    # Arrange
-    a, b, c, d, e = [UUID(int=n) for n in range(1, 6)]
-    edges = [
-        er.MatchCandidateData(x, y, rule, ())
-        for x, y, rule in [
-            (a, b, "domain"),
-            (b, c, "linkedin"),
-            (a, c, "external_id"),
-            (c, d, "name_only"),
-            (d, e, "domain"),
-        ]
-    ]
-    # Act
-    groups = er.components(edges)
-    # Assert
-    assert groups == [{a, b, c}, {d, e}]
-
-
 def test_empty_tenant_creates_nothing_and_does_not_commit(session):
     # Arrange
     session.scalar.return_value = Tenant(id=TENANT)
-    session.scalars.side_effect = [[], [], []]
+    session.scalars.side_effect = [[], [], [], []]
     # Act
     result = er.match_organizations(session, TENANT)
     # Assert
@@ -282,6 +258,7 @@ def test_query_requires_current_versions_and_both_tenant_filters(session):
     # Arrange
     org_id = UUID(int=50)
     items = [record()]
+    session.get.return_value = Organization(id=org_id, tenant_id=TENANT)
     session.scalars.return_value = iter(items)
     # Act
     result = current_records(session, TENANT, org_id)
@@ -313,7 +290,7 @@ def test_command_commits_and_logs_summary(mocker, session, capsys):
     mocker.patch.object(command, "get_session_factory", return_value=lambda: session)
     mocker.patch.object(command, "find_tenant", return_value=Tenant(id=TENANT))
     matcher = mocker.patch.object(
-        command, "match_organizations", return_value=er.MatchResult(1, 2, 3)
+        command, "match_organizations", return_value=er.MatchResult(1, 2, 3, 4)
     )
     people = mocker.patch.object(
         command, "match_people", return_value=PersonMatchResult(1, 2, 0, 1)
@@ -327,6 +304,9 @@ def test_command_commits_and_logs_summary(mocker, session, capsys):
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
     assert events[0]["event"] == "organization_matching_completed"
     assert events[0]["organizations_created"] == 1
+    assert events[0]["links_created"] == 2
+    assert events[0]["candidates_created"] == 3
+    assert events[0]["organizations_merged"] == 4
     assert events[1]["event"] == "people_matching_completed"
     assert events[1]["people_created"] == 1
 
