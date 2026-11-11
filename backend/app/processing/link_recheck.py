@@ -108,13 +108,10 @@ def _as_rule_entries(evidence: Sequence[Mapping[str, Any]]) -> list[RuleEvidence
         return None
     entries: list[RuleEvidence] = []
     for item in evidence:
-        if not isinstance(item, Mapping):
+        if not isinstance(item, Mapping) or MANUAL_EVIDENCE_KEY in item:
             return None
-        if MANUAL_EVIDENCE_KEY in item:
-            return None
-        if any(key not in item for key in RULE_EVIDENCE_KEYS):
-            return None
-        if any(not isinstance(item[key], str) for key in RULE_EVIDENCE_KEYS):
+        # Missing keys become None via .get, so one check covers both shape and types.
+        if any(not isinstance(item.get(key), str) for key in RULE_EVIDENCE_KEYS):
             return None
         entries.append(cast(RuleEvidence, item))
     return entries
