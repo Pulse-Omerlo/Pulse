@@ -30,13 +30,8 @@ from app.processing.sector_mix import (
 # One optional <omerlo_media_id or tenant id>.toml per network; see the README in this folder.
 DEFAULT_SETTINGS_DIR = Path(__file__).parents[1] / "processing" / "sector_targets"
 
-# The people of a tenant with the organization each works for, or None while people
-# are not linked to organizations.
-PeopleSource = Callable[[Session, uuid.UUID], list[PersonUnit] | None]
-
-
-def no_linked_people(session: Session, tenant_id: uuid.UUID) -> list[PersonUnit] | None:
-    return None
+# The people of a tenant with the organization each works for.
+PeopleSource = Callable[[Session, uuid.UUID], list[PersonUnit]]
 
 
 def settings_dir() -> Path:
@@ -97,17 +92,18 @@ def organization_units(session: Session, tenant_id: uuid.UUID) -> list[Organizat
 
 
 def measure_sector_mix(
-    session: Session, run: SyncRun, people: PeopleSource = no_linked_people
+    session: Session, run: SyncRun, people: PeopleSource | None = None
 ) -> SectorMixResult:
     """Compute the tenant's sector mix and store it for `run`, replacing an earlier result.
+
+    Without `people`, people are not linked to organizations yet and their shares stay empty.
 
     Runs inside the caller's transaction, in a session bound to the run's tenant.
     """
     tenant = session.get_one(Tenant, run.tenant_id)
     settings = settings_for(tenant)
-    mix = compute_mix(
-        organization_units(session, run.tenant_id), people(session, run.tenant_id), settings
-    )
+    linked = people(session, run.tenant_id) if people else None
+    mix = compute_mix(organization_units(session, run.tenant_id), linked, settings)
     session.execute(
         delete(SectorMixResult).where(
             SectorMixResult.tenant_id == run.tenant_id, SectorMixResult.sync_run_id == run.id

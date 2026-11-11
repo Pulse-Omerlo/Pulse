@@ -99,8 +99,7 @@ class Network:
 
     def measure(self, run: SyncRun | None = None, people=None) -> SectorMixResult:
         with bound_to_tenant(self.session, self.tenant.id):
-            options = {"people": people} if people else {}
-            result = measure_sector_mix(self.session, run or self.runs[-1], **options)
+            result = measure_sector_mix(self.session, run or self.runs[-1], people)
             self.session.commit()
             return result
 
