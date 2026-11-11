@@ -7,8 +7,8 @@ request, plus one for its metadata and, for events, one for its sessions.
 
 The API can sort by `updated_at` but has no "updated since" filter. An incremental
 sync therefore lists newest first and stops at the first record older than the
-watermark; deleted records never appear in a list, so only the sync run's periodic
-full sync can detect them (#55).
+watermark. Deleted records never appear in a list, so a full sync finds them by
+their absence; a record that answers 404 after being listed is yielded as deleted.
 """
 
 import logging
@@ -130,61 +130,60 @@ class OmerloConnector:
                 continue
             if not is_after(record, watermark):
                 break  # newest first: every remaining record is older still
-            detail = self._detail(kind, record.external_id)
-            if detail is None:
-                continue
-            yield detail
-            if self._metadata:
-                yield from self._record_metadata(kind, record.external_id)
-            if kind == "event" and self._event_sessions:
-                yield from self._sessions(record.external_id)
+            yield from self._read_record(record)
 
-    def _detail(self, kind: str, record_id: str) -> RawRecord | None:
-        path = COMMUNITY_DETAIL.format(path=COMMUNITY[kind], id=record_id)
+    @property
+    def reads_event_sessions(self) -> bool:
+        """Whether each event read comes with its whole session list."""
+        return "event" in self._entity_kinds and self._event_sessions
+
+    def _read_record(self, summary: RawRecord) -> list[RawRecord]:
+        """The record's detail, metadata and sessions, or only the summary flagged deleted.
+
+        A 404 on any of them means the record was deleted after it was listed.
+        """
+        kind, record_id = summary.entity_kind, summary.external_id
         try:
-            body = get_json(self._client, path)
+            records = [self._detail(kind, record_id)]
+            if self._metadata:
+                records.append(self._record_metadata(kind, record_id))
+            if kind == "event" and self._event_sessions:
+                records += self._sessions(record_id)
         except OmerloNotFoundError:
-            logger.warning("Omerlo %s %s disappeared before its detail was read", kind, record_id)
-            return None
-        record = detail_record(kind, body)
+            logger.warning("Omerlo %s %s was deleted during the sync", kind, record_id)
+            return [replace(summary, deleted=True)]
+        return records
+
+    def _detail(self, kind: str, record_id: str) -> RawRecord:
+        path = COMMUNITY_DETAIL.format(path=COMMUNITY[kind], id=record_id)
+        record = detail_record(kind, get_json(self._client, path))
         if record is None:
             raise OmerloAPIError(f"{path}: response has no data object")
         return record
 
-    def _record_metadata(self, kind: str, record_id: str) -> Iterator[RawRecord]:
+    def _record_metadata(self, kind: str, record_id: str) -> RawRecord:
         """The record's metadata entries, as one raw record holding the whole response."""
         path = COMMUNITY_METADATA.format(path=COMMUNITY[kind], id=record_id)
-        try:
-            body = get_json(self._client, path)
-        except OmerloNotFoundError:
-            logger.warning("Omerlo %s %s disappeared before its metadata was read", kind, record_id)
-            return
-        yield RawRecord(
+        return RawRecord(
             entity_kind=f"{kind}_metadata",
             external_id=record_id,
             updated_at=None,
-            payload=body,
+            payload=get_json(self._client, path),
             parent_external_id=record_id,
         )
 
-    def _sessions(self, event_id: str) -> Iterator[RawRecord]:
+    def _sessions(self, event_id: str) -> list[RawRecord]:
         """The event's current sessions.
 
         They are a complete replacement set: a session removed from the event simply
         stops appearing, so the sync run must compare against the previous set.
         """
         path = EVENT_SESSIONS.format(id=event_id)
-        try:
-            sessions = get_json(self._client, path).get("data")
-        except OmerloNotFoundError:
-            logger.warning("Omerlo event %s disappeared before its sessions were read", event_id)
-            return
+        sessions = get_json(self._client, path).get("data")
         if not isinstance(sessions, list):
             raise OmerloAPIError(f"{path}: response has no data list")
-        for session in sessions:
-            record = to_record("event_session", session)
-            if record is not None:
-                yield replace(record, parent_external_id=event_id)
+        records = (to_record("event_session", session) for session in sessions)
+        return [replace(r, parent_external_id=event_id) for r in records if r is not None]
 
 
 def detail_record(kind: str, body: dict[str, Any]) -> RawRecord | None:

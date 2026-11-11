@@ -323,6 +323,35 @@ def test_named_profile_without_locales_has_no_name():
     assert record.name_normalized is None
 
 
+# -------------------------------------------------------------- event session
+
+
+def test_event_session_keeps_its_event_and_takes_its_title_as_name():
+    # Arrange
+    payload = payloads.event_session()
+
+    # Act
+    record = map_record("event_session", payload)
+
+    # Assert
+    assert record.kind == "event_session"
+    assert record.external_id == "session-1"
+    assert record.workspace_id is None
+    assert record.name_normalized == "conference d ouverture"
+    assert record.attributes["event_id"] == "event-1"
+    assert record.attributes["session_speakers"] == payload["session_speakers"]
+
+
+@pytest.mark.parametrize("event_id", [None, ""])
+def test_event_session_without_its_event_fails(event_id):
+    # Arrange
+    payload = payloads.event_session() | {"event_id": event_id}
+
+    # Act / Assert
+    with pytest.raises(MappingError, match="no event_id"):
+        map_record("event_session", payload)
+
+
 # -------------------------------------------------------------------- content
 
 

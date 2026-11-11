@@ -24,7 +24,7 @@ CONFIGS = {
         # would hide changed payloads. Never supply historical records here.
         unique_by=(),
     )
-    for kind in ("organization", "person", "event", "project", "content")
+    for kind in ("organization", "person", "event", "project", "content", "event_session")
 }
 
 

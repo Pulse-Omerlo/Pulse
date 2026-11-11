@@ -146,6 +146,29 @@ def event() -> dict[str, Any]:
     }
 
 
+def event_session() -> dict[str, Any]:
+    return {
+        "id": "session-1",
+        "event_id": "event-1",
+        "location": "Salle Desjardins",
+        "starts_at": "2026-07-04T19:00:00Z",
+        "ends_at": None,
+        "timezone": "America/Toronto",
+        "locales": [
+            {
+                "id": "sl-fr",
+                "locale": "fr",
+                "title_html": "<p>Conférence d'ouverture</p>",
+                "description_html": None,
+                "deleted_at": None,
+            }
+        ],
+        "session_speakers": [{"id": "speaker-1", "position": 1, "actor_id": "person-1"}],
+        "inserted_at": "2026-06-01T12:00:00Z",
+        "updated_at": "2026-06-15T12:00:00Z",
+    }
+
+
 def content() -> dict[str, Any]:
     return {
         "id": "content-1",
