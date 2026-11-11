@@ -148,7 +148,7 @@
   text-transform: capitalize;
 }
 
-.filter:disabled {
+.sync-runs-page button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
 }
@@ -240,4 +240,8 @@
 
 .empty {
   color: var(--text);
+}
+
+.placeholder {
+  border-style: dashed;
 }

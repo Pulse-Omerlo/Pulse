@@ -13,6 +13,7 @@ import {
   type Tenant,
 } from "../../services/api";
 import { ErrorMessage } from "../ErrorMessage";
+import { GoalsView } from "../goals/GoalsView";
 import { OrganizationsView } from "../organizations/OrganizationsView";
 import { ChangeList } from "./ChangeList";
 import { RecordHistoryPanel } from "./RecordHistoryPanel";
@@ -29,7 +30,7 @@ export function SyncRunsPage() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<RecordSummary[] | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const [view, setView] = useState<"runs" | "organizations">("runs");
+  const [view, setView] = useState<"goals" | "runs" | "organizations">("runs");
 
   const selectRun = (selected: SyncRun | null, tenant: string | null = tenantId) => {
     setRun(selected);
@@ -97,6 +98,17 @@ export function SyncRunsPage() {
         <div className="filters" role="group" aria-label="View">
           <button
             type="button"
+            aria-pressed={view === "goals"}
+            className={view === "goals" ? "filter active" : "filter"}
+            onClick={() => {
+              setView("goals");
+              setHistory(null);
+            }}
+          >
+            Goals
+          </button>
+          <button
+            type="button"
             aria-pressed={view === "runs"}
             className={view === "runs" ? "filter active" : "filter"}
             onClick={() => {
@@ -162,7 +174,9 @@ export function SyncRunsPage() {
         </section>
       )}
 
-      {view === "organizations" && tenantId ? (
+      {view === "goals" ? (
+        <GoalsView />
+      ) : view === "organizations" && tenantId ? (
         history ? (
           <RecordHistoryPanel history={history} runs={runs} onClose={() => setHistory(null)} />
         ) : (
