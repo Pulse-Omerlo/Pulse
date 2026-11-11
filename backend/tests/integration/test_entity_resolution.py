@@ -618,3 +618,14 @@ def test_weak_match_inside_one_organization_is_not_set_aside(session):
     assert (
         session.scalar(select(MatchCandidate).where(MatchCandidate.tenant_id == tenant.id)) is None
     )
+
+
+def test_old_organization_id_lists_the_survivors_records(session):
+    # Arrange
+    tenant, _, _, records, _, large, older = chained_organizations(session)
+    match_organizations(session, tenant.id)
+    # Act
+    by_old_id = current_records(session, tenant.id, older.id)
+    # Assert
+    assert by_old_id == current_records(session, tenant.id, large.id)
+    assert {record.id for record in by_old_id} == {record.id for record in records}

@@ -9,7 +9,7 @@ import pytest
 
 from app import match as command
 from app.core.tenancy import TenantContextError
-from app.models import SourceRecord, Tenant
+from app.models import Organization, SourceRecord, Tenant
 from app.processing import entity_resolution as er
 from app.processing.normalization import (
     normalize_city,
@@ -258,6 +258,7 @@ def test_query_requires_current_versions_and_both_tenant_filters(session):
     # Arrange
     org_id = UUID(int=50)
     items = [record()]
+    session.get.return_value = Organization(id=org_id, tenant_id=TENANT)
     session.scalars.return_value = iter(items)
     # Act
     result = current_records(session, TENANT, org_id)

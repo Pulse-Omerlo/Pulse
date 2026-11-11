@@ -11,13 +11,17 @@ from app.models import Organization, OrgLink, SourceRecord
 
 # This service retrieves the current records belonging to an organization.
 # It joins records through their organization links, checks the tenant on both tables, and excludes
-# historical versions so each logical record's current membership is shown
+# historical versions so each logical record's current membership is shown. A merged
+# organization's id lists the records of the organization it was merged into.
 def current_records(
     session: Session,
     tenant_id: UUID,
     organization_id: UUID,
 ) -> list[SourceRecord]:
     with bound_to_tenant(session, tenant_id):
+        organization_id = surviving_organization_id(session, tenant_id, organization_id)
+        if organization_id is None:
+            return []
         return list(
             session.scalars(
                 select(SourceRecord)
