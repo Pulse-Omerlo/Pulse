@@ -272,7 +272,11 @@ def _link_facts(run: _Run) -> dict[UUID, LinkFacts]:
     for record_id, link in run.links.items():
         organization = run.organizations.get(link.organization_id)
         target = organization.merged_into if organization and organization.merged_into else None
-        facts[record_id] = LinkFacts(target or link.organization_id, link.method == "manual")
+        facts[record_id] = LinkFacts(
+            target or link.organization_id,
+            manual=link.method == "manual",
+            stored_organization_id=link.organization_id if target else None,
+        )
     return facts
 
 
@@ -343,7 +347,7 @@ def _apply(run: _Run, cluster: Cluster) -> None:
     for merged_id in cluster.merged:
         _merge(run, merged_id, organization.id)
     # Moves the current links of merged organizations; closed versions keep theirs.
-    for record_id in sorted(cluster.members & run.links.keys()):
+    for record_id in cluster.repointed:
         run.links[record_id].organization_id = organization.id
     for new_link in cluster.new_links:
         _add_link(run, new_link, organization.id)

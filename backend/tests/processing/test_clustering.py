@@ -143,7 +143,7 @@ def test_parent_and_subsidiary_sharing_a_linkedin_page_are_not_merged():
     plan = plan_clusters(items, [edge(A, B, "linkedin")], links)
     # Assert
     assert [e.rule for e in plan.candidates] == ["linkedin"]
-    assert plan.clusters == ()
+    assert [(c.members, c.merged) for c in plan.clusters] == [({A}, ()), ({B}, ())]
 
 
 def test_weakest_link_is_cut_even_when_listed_first():
@@ -180,8 +180,10 @@ def test_manual_organization_is_never_merged():
     plan = plan_clusters(items, [edge(A, B, "domain"), edge(B, C, "domain")], links)
     # Assert
     assert [(e.left, e.right) for e in plan.candidates] == [(A, B)]
-    (cluster,) = plan.clusters
-    assert cluster.organization_id == ORG_2 and cluster.members == {B, C}
+    assert [(c.organization_id, c.members) for c in plan.clusters] == [
+        (ORG_1, {A}),
+        (ORG_2, {B, C}),
+    ]
 
 
 def test_manual_organization_can_still_gain_an_unlinked_record():
@@ -205,9 +207,10 @@ def test_rule_outside_tier1_never_merges_two_organizations():
     plan = plan_clusters(items, edges, links)
     # Assert
     assert [(e.left, e.right) for e in plan.candidates] == [(A, B)]
-    (cluster,) = plan.clusters
+    cluster = plan.clusters[1]
     assert cluster.organization_id == ORG_2 and cluster.merged == ()
     assert [link.record_id for link in cluster.new_links] == [C]
+    assert all(not c.merged for c in plan.clusters)
 
 
 def test_name_city_edge_attaches_records_but_never_merges_organizations():
@@ -361,3 +364,35 @@ def test_record_that_can_only_join_one_side_is_not_a_tie(ids):
     # Assert
     assert [cluster.members for cluster in plan.clusters] == [{record, same}]
     assert [set(e.providePair) for e in plan.candidates] == [{record, other}]
+
+
+def test_link_still_on_a_merged_organization_is_repointed():
+    # Arrange: A's stored link points at ORG_3, which was merged into ORG_1.
+    items = members(Member(A), Member(B))
+    links = {A: LinkFacts(ORG_1, stored_organization_id=ORG_3), B: LinkFacts(ORG_1)}
+    # Act
+    plan = plan_clusters(items, [], links)
+    # Assert
+    (cluster,) = plan.clusters
+    assert cluster.organization_id == ORG_1 and cluster.repointed == (A,)
+    assert cluster.merged == () and cluster.changed
+
+
+def test_lone_record_on_a_merged_organization_is_repointed():
+    # Arrange
+    items = members(Member(A))
+    links = {A: LinkFacts(ORG_1, stored_organization_id=ORG_3)}
+    # Act
+    plan = plan_clusters(items, [], links)
+    # Assert
+    assert [(c.members, c.repointed) for c in plan.clusters] == [({A}, (A,))]
+
+
+def test_merge_repoints_the_links_of_the_merged_organization():
+    # Arrange
+    items = members(*(Member(n, domain="exemple.ca") for n in (A, B, C)))
+    links = {A: LinkFacts(ORG_2), B: LinkFacts(ORG_1), C: LinkFacts(ORG_1)}
+    # Act
+    plan = plan_clusters(items, [edge(A, B, "domain")], links)
+    # Assert
+    assert plan.clusters[0].repointed == (A,)

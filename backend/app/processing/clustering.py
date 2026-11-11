@@ -33,6 +33,12 @@ class LinkFacts:
 
     organization_id: UUID
     manual: bool = False
+    # The organization the stored link names, when it is one that was merged away.
+    stored_organization_id: UUID | None = None
+
+    @property
+    def stored(self) -> UUID:
+        return self.stored_organization_id or self.organization_id
 
 
 @dataclass(frozen=True)
@@ -53,10 +59,12 @@ class Cluster:
     new_links: tuple[NewLink, ...]
     display_name: str | None
     primary_domain: str | None
+    # Linked members whose stored link names another organization than this one.
+    repointed: tuple[UUID, ...] = ()
 
     @property
     def changed(self) -> bool:
-        return self.organization_id is None or bool(self.merged or self.new_links)
+        return self.organization_id is None or bool(self.merged or self.new_links or self.repointed)
 
 
 @dataclass(frozen=True)
@@ -154,6 +162,7 @@ def _cluster(
         new_links=_new_links(group, edges, links),
         display_name=name,
         primary_domain=domain,
+        repointed=tuple(sorted(r for r in group if r in links and links[r].stored != survivor)),
     )
 
 
@@ -233,6 +242,6 @@ def plan_clusters(
     clusters = tuple(
         _cluster(members, links, group, edges_by_root[min(group)])
         for group in groups.sets.groups()
-        if len(group) > 1
+        if len(group) > 1 or group & links.keys()
     )
     return ClusterPlan(clusters=clusters, candidates=tuple(cut))

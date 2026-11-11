@@ -11,7 +11,7 @@ from app.ingestion.mapped import MappedRecord
 from app.models import MatchCandidate, Organization, OrgLink, Source, SourceRecord, SyncRun, Tenant
 from app.processing.entity_resolution import MatchResult, match_organizations
 from app.services.organizations import current_records, surviving_organization_id
-from app.services.source_records import upsert_records
+from app.services.source_records import close_unseen, upsert_records
 
 pytestmark = pytest.mark.integration
 START = datetime(2026, 11, 1, tzinfo=UTC)
@@ -465,3 +465,66 @@ def test_member_whose_domain_changed_still_brings_in_records_on_the_new_domain(s
     # Assert
     assert result == MatchResult(0, 1, 0)
     assert session.get(OrgLink, added.id).organization_id == organization_id
+
+
+def test_link_left_on_a_merged_organization_is_moved_to_the_survivor(session):
+    # Arrange: a sync copied a link onto the merged organization after the merge.
+    tenant, run, _, _, small, large, _ = chained_organizations(session)
+    match_organizations(session, tenant.id)
+    newcomer = MappedRecord(
+        kind="organization", external_id="9", workspace_id=None, name_normalized="org 9"
+    )
+    upsert_records(session, run, [newcomer])
+    added = session.scalar(
+        select(SourceRecord).where(
+            SourceRecord.tenant_id == tenant.id, SourceRecord.external_id == "9"
+        )
+    )
+    rule_link(session, [added], small)
+    # Act
+    result = match_organizations(session, tenant.id)
+    session.expire_all()
+    # Assert
+    assert result == MatchResult()
+    assert session.get(OrgLink, added.id).organization_id == large.id
+
+
+def test_record_back_after_a_merge_gets_the_survivors_link(session):
+    # Arrange: records 0 and 3 in one organization, 1 and 2 in another, 4 joins them.
+    tenant, run, mapped, records = setup_records(
+        session,
+        [
+            {"domain": "exemple.ca"},
+            {"linkedin": "company/exemple"},
+            {"linkedin": "company/exemple"},
+            {"domain": "exemple.ca"},
+            {"domain": "exemple.ca", "linkedin": "company/exemple"},
+        ],
+    )
+    small = rule_link(session, [records[0], records[3]])
+    large = rule_link(session, records[1:3])
+    runs = []
+    for day in (1, 2):
+        later = SyncRun(
+            tenant_id=tenant.id, source_id=run.source_id, started_at=START + timedelta(days=day)
+        )
+        session.add(later)
+        session.flush()
+        runs.append(later)
+    upsert_records(session, runs[0], mapped[1:])
+    close_unseen(session, runs[0])
+    match_organizations(session, tenant.id)
+    # Act
+    upsert_records(session, runs[1], [mapped[0]])
+    session.expire_all()
+    back = session.scalar(
+        select(SourceRecord).where(
+            SourceRecord.tenant_id == tenant.id,
+            SourceRecord.external_id == "0",
+            SourceRecord.valid_to.is_(None),
+        )
+    )
+    # Assert
+    assert session.get(Organization, small.id).merged_into == large.id
+    assert session.get(OrgLink, back.id).organization_id == large.id
+    assert back.id in {member.id for member in current_records(session, tenant.id, large.id)}
