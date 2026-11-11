@@ -29,12 +29,13 @@ pytestmark = pytest.mark.integration
 SEED = 5
 SLUG = "demo-capitale"
 # Fixture kind -> entity kind, for the records that become source records.
-ENTITY_FILES = {
+PROFILE_FILES = {
     "organizations": "organization",
     "people": "person",
     "projects": "project",
     "events": "event",
 }
+ENTITY_FILES = {**PROFILE_FILES, "event_sessions": "event_session"}
 
 
 class Clock:
@@ -111,7 +112,7 @@ def current_ids(session: Session) -> set[str]:
 
 
 def ids_of(entries) -> set[str]:
-    """Ids of the diff entries that are source records (not event sessions)."""
+    """Ids of the diff entries that are source records."""
     return {entry["id"] for entry in entries if entry["kind"] in ENTITY_FILES}
 
 
@@ -140,7 +141,7 @@ def test_first_full_sync_stores_every_record_and_sets_the_watermarks(
     assert raw_rows == run.counts["fetched"]
     session.refresh(source)
     for workspace in data.resources["workspaces"]:
-        for kind, entity_kind in ENTITY_FILES.items():
+        for kind, entity_kind in PROFILE_FILES.items():
             in_workspace = [
                 parse_timestamp(r["updated_at"])
                 for r in data.resources[kind]

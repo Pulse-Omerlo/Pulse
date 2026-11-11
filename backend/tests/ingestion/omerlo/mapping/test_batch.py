@@ -17,6 +17,7 @@ FIXTURE_KINDS = {
     "people": "person",
     "projects": "project",
     "events": "event",
+    "event_sessions": "event_session",
 }
 
 
@@ -91,17 +92,30 @@ def test_companions_without_their_parent_are_logged_and_dropped(parent, caplog):
 
 def test_reference_kinds_are_skipped():
     # Arrange
-    records = [
-        raw("workspace", {"id": "ws-1"}),
-        raw("category", {"id": "cat-1"}),
-        raw("event_session", {"id": "session-1"}, parent="event-1"),
-    ]
+    records = [raw("workspace", {"id": "ws-1"}), raw("category", {"id": "cat-1"})]
 
     # Act
     result = map_records(records)
 
     # Assert
     assert result.records == ()
+
+
+def test_event_sessions_are_mapped_as_records_of_their_own():
+    # Arrange
+    records = [
+        raw("event", payloads.event()),
+        raw("event_session", payloads.event_session(), parent="event-1"),
+    ]
+
+    # Act
+    result = map_records(records)
+
+    # Assert
+    assert [(r.kind, r.external_id) for r in result.records] == [
+        ("event", "event-1"),
+        ("event_session", "session-1"),
+    ]
 
 
 def test_malformed_companion_bodies_read_as_empty():
@@ -180,13 +194,15 @@ def test_every_synthetic_record_maps(synthetic_tenant):
     organizations = [r for r in result.records if r.kind == "organization"]
     assert all(r.name_normalized for r in organizations)
     assert any(r.external_ids.get("crm_id") for r in organizations)
-    assert all(r.workspace_id for r in result.records)
+    assert all(r.workspace_id for r in result.records if r.kind != "event_session")
     with_website = [r for r in organizations if r.attributes["identifiers"]["domains"]]
     assert with_website
     assert all(r.domain == r.attributes["identifiers"]["domains"][0] for r in with_website)
 
 
-@pytest.mark.parametrize("kind", ["organization", "person", "event", "project", "content"])
+@pytest.mark.parametrize(
+    "kind", ["organization", "person", "event", "project", "content", "event_session"]
+)
 def test_cleaning_runs_for_each_kind_and_deduplicates_only_exact_batch_repeats(kind):
     builder = getattr(payloads, kind)
     payload = builder()
