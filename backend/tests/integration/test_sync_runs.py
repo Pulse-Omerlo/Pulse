@@ -116,6 +116,23 @@ def ids_of(entries) -> set[str]:
     return {entry["id"] for entry in entries if entry["kind"] in ENTITY_FILES}
 
 
+def apply_demo(fixtures) -> tuple[dict, set[str]]:
+    """Apply the demo set: its diff, and the sessions it dropped from events that remain.
+
+    Those are the only removals an incremental sync can see, through the event re-read.
+    """
+    sessions = {s["id"]: s for s in tenant_fixtures(fixtures).resources["event_sessions"]}
+    diff = apply_set(fixtures, DEMO)["tenants"][SLUG]
+    deleted_events = {e["id"] for e in diff["removed"] if e["kind"] == "events"}
+    dropped = {
+        entry["id"]
+        for entry in diff["removed"]
+        if entry["kind"] == "event_sessions"
+        and sessions[entry["id"]]["event_id"] not in deleted_events
+    }
+    return diff, dropped
+
+
 def test_first_full_sync_stores_every_record_and_sets_the_watermarks(
     session, source, sync, fixtures
 ):
@@ -158,7 +175,7 @@ def test_incremental_sync_after_the_demo_mutation_stores_what_changed(
     first = sync(full=True)
     session.refresh(source)
     before = dict(source.workspace_watermarks)
-    diff = apply_set(fixtures, DEMO)["tenants"][SLUG]
+    diff, dropped = apply_demo(fixtures)
 
     # Act
     run = sync()
@@ -168,7 +185,7 @@ def test_incremental_sync_after_the_demo_mutation_stores_what_changed(
     assert run.counts["fetched"] < first.counts["fetched"]
     assert run.counts["new"] == len(ids_of(diff["added"]))
     assert run.counts["changed"] == len(ids_of(diff["modified"]))
-    assert run.counts["removed"] == 0
+    assert run.counts["removed"] == len(dropped) == 1
     new_versions = select(SourceRecord.external_id).where(SourceRecord.first_seen_run == run.id)
     assert set(session.scalars(new_versions)) == ids_of(diff["added"]) | ids_of(diff["modified"])
     for external_id in ids_of(diff["modified"]):
@@ -176,8 +193,9 @@ def test_incremental_sync_after_the_demo_mutation_stores_what_changed(
             select(SourceRecord).where(SourceRecord.external_id == external_id)
         ).all()
         assert sorted(v.valid_to is None for v in versions) == [False, True]
-    # Incremental runs cannot see deletions; the deleted records stay current.
-    assert ids_of(diff["removed"]) <= current_ids(session)
+    # Records deleted outright are no longer listed, so they stay current until a full sync.
+    assert ids_of(diff["removed"]) - dropped <= current_ids(session)
+    assert not dropped & current_ids(session)
     session.refresh(source)
     assert source.workspace_watermarks != before
 
@@ -302,15 +320,15 @@ def of_type(found, change_type: str) -> set[tuple[str, str]]:
 def test_a_sync_after_the_demo_mutation_records_the_expected_changes(session, sync, fixtures, full):
     # Arrange
     sync(full=True)
-    wanted = expected(apply_set(fixtures, DEMO)["tenants"][SLUG])
+    diff, dropped = apply_demo(fixtures)
+    wanted = expected(diff)
 
     # Act
     run = sync(full=full)
 
     # Assert
     found = recorded_changes(session, run)
-    # Only a full sync can see deletions.
-    removed = wanted.removed if full else set()
+    removed = wanted.removed if full else {("event_session", s) for s in dropped}
     assert of_type(found, "added") == wanted.added
     assert of_type(found, "modified") == set(wanted.modified)
     assert of_type(found, "removed") == removed
@@ -360,7 +378,7 @@ def test_a_record_deleted_after_it_was_listed_is_removed_in_any_run(
 ):
     # Arrange
     sync(full=True)
-    diff = apply_set(fixtures, DEMO)["tenants"][SLUG]
+    diff, dropped = apply_demo(fixtures)
     gone = next(entry["id"] for entry in diff["modified"] if entry["kind"] == "organizations")
     last_version = current_version_id(session, gone)
     detail = COMMUNITY_DETAIL.format(path="organizations", id=gone)
@@ -376,11 +394,29 @@ def test_a_record_deleted_after_it_was_listed_is_removed_in_any_run(
     assert change.source_record_id == last_version
     assert gone not in current_ids(session)
     removed = of_type(recorded_changes(session, run), "removed")
-    if full:
-        assert removed == expected(diff).removed | {("organization", gone)}
-    else:
-        assert removed == {("organization", gone)}
+    seen = expected(diff).removed if full else {("event_session", s) for s in dropped}
+    assert removed == seen | {("organization", gone)}
     assert run.counts["removed"] == len(removed)
+
+
+def test_an_event_deleted_after_it_was_listed_takes_its_sessions(session, sync, mock_app, fixtures):
+    # Arrange
+    data = tenant_fixtures(fixtures)
+    sync(full=True)
+    _, [dropped] = apply_demo(fixtures)
+    event_id = next(s["event_id"] for s in data.resources["event_sessions"] if s["id"] == dropped)
+    sessions = {s["id"] for s in data.resources["event_sessions"] if s["event_id"] == event_id}
+    detail = COMMUNITY_DETAIL.format(path="events", id=event_id)
+
+    # Act
+    with mock_client(deleted_after_listing(mock_app, detail)) as client:
+        run = sync(client=client)
+
+    # Assert
+    assert (run.status, run.mode) == ("succeeded", "incremental")
+    removed = of_type(recorded_changes(session, run), "removed")
+    assert removed == {("event", event_id)} | {("event_session", s) for s in sessions}
+    assert not ({event_id} | sessions) & current_ids(session)
 
 
 def test_a_sync_with_no_source_changes_records_no_changes(session, sync):
