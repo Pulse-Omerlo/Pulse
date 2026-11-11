@@ -70,21 +70,3 @@ def test_tier1_evidence_is_unchanged():
         "matched_value": "a.ca",
         "matched_record_id": str(RIGHT),
     }
-
-
-def test_fuzzy_edges_skip_pairs_tier1_classified():
-    # Arrange
-    records = [
-        record(1, "imprimerie belanger"),
-        record(2, "imprimerie belangers"),
-        record(3, "imprimerie belangere"),
-    ]
-    tier1 = [er.MatchCandidateData(UUID(int=1), UUID(int=2), "domain", ())]
-    # Act
-    edges = er.fuzzy_edges(records, frozenset(), tier1)
-    # Assert
-    assert {edge.providePair for edge in edges} == {
-        (UUID(int=1), UUID(int=3)),
-        (UUID(int=2), UUID(int=3)),
-    }
-    assert all(edge.rule == "fuzzy" and edge.score for edge in edges)

@@ -38,9 +38,8 @@ def record(number, name, *, tenant=TENANT, city=None, phones=(), emails=(), **fi
 
 
 def match_rules(*records, config=CONFIG, known=frozenset()):
-    return [
-        (match.pair, match.rule) for match in fm.fuzzy_matches(records, EXCLUDED, known, config)
-    ]
+    matches = fm.fuzzy_matches(records, EXCLUDED, known, config)
+    return [(match.providePair, match.rule) for match in matches]
 
 
 @pytest.mark.parametrize(

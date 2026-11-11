@@ -24,7 +24,6 @@ from app.processing.clustering import (
     organization_domain,
     plan_clusters,
 )
-from app.processing.fuzzy_config import FuzzyConfig
 from app.processing.fuzzy_matching import fuzzy_matches
 
 # Rule names stay importable from here for existing callers.
@@ -185,27 +184,13 @@ def blocked_matches(
     return sorted(matches, key=strength_key)
 
 
-def fuzzy_edges(
-    records: Iterable[SourceRecord],
-    excluded_domains: frozenset[str],
-    tier1: Iterable[MatchCandidateData],
-    config: FuzzyConfig | None = None,
-) -> list[MatchCandidateData]:
-    """Tier 2 matches for the pairs Tier 1 did not classify."""
-    known = {match.providePair for match in tier1}
-    return [
-        MatchCandidateData(m.left, m.right, m.rule, m.fields, m.score, m.sides)
-        for m in fuzzy_matches(records, excluded_domains, known, config)
-    ]
-
-
 # Function to generate evidence for a match candidate, used to provide context for the matching
 # decision
 def evidence(match: MatchCandidateData, matched_record_id: UUID) -> list[RuleEvidence]:
     # Sides are written from this record's point of view: its value first.
-    from_left = matched_record_id == match.right
+    this_is_left = matched_record_id == match.right
     values = [(field, value, value) for field, value in match.fields] + [
-        (field, left, right) if from_left else (field, right, left)
+        (field, left, right) if this_is_left else (field, right, left)
         for field, left, right in match.sides
     ]
     return [
@@ -408,7 +393,8 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
 
         generic_domains = load_generic_domains()
         matches = blocked_matches(records.values(), generic_domains)
-        matches += fuzzy_edges(records.values(), generic_domains, matches)
+        tier1_pairs = {match.providePair for match in matches}
+        matches += fuzzy_matches(records.values(), generic_domains, tier1_pairs)
         plan = plan_clusters(
             {key: member_from_record(record, generic_domains) for key, record in records.items()},
             matches,

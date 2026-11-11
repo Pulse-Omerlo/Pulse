@@ -11,43 +11,21 @@ from rapidfuzz import fuzz
 
 from app.models import SourceRecord
 from app.processing.fuzzy_config import FuzzyConfig, load_fuzzy_config
+from app.processing.match_rules import (
+    FUZZY_NAME_RULE,
+    FUZZY_RULE,
+    Fields,
+    MatchCandidateData,
+    Pair,
+    Sides,
+)
 from app.processing.normalization import email_domain
 
-FUZZY_RULE_VERSION = "tier2-v1"
-# Similar names plus an agreeing secondary signal and no conflicting one: may be linked.
-FUZZY_RULE = "fuzzy"
-# Similar names alone: only ever proposed for review.
-FUZZY_NAME_RULE = "fuzzy_name"
-FUZZY_RULES = frozenset({FUZZY_RULE, FUZZY_NAME_RULE})
-
-Pair = tuple[UUID, UUID]
 Key = tuple[str, ...]
-# (field, value) found on both records.
-Fields = tuple[tuple[str, str], ...]
-# (field, value on the left record, value on the right record).
-Sides = tuple[tuple[str, str, str], ...]
 Scorer = Callable[[str, str], float]
 
 # Measured against ratio, token_set_ratio and WRatio on the synthetic duplicates.
 SCORER: Scorer = fuzz.token_sort_ratio
-
-
-@dataclass(frozen=True)
-class FuzzyMatch:
-    left: UUID
-    right: UUID
-    rule: str
-    score: float
-    fields: Fields
-    sides: Sides
-
-    @property
-    def pair(self) -> Pair:
-        return (self.left, self.right)
-
-    @property
-    def strong(self) -> bool:
-        return self.rule == FUZZY_RULE
 
 
 @dataclass(frozen=True)
@@ -192,19 +170,19 @@ def decide(
     right: SourceRecord,
     score: float,
     excluded_domains: frozenset[str],
-) -> FuzzyMatch:
+) -> MatchCandidateData:
     """A link only with an agreeing signal and no conflict; otherwise a review."""
     agreeing, conflicts = compare_signals(
         signals(left, excluded_domains), signals(right, excluded_domains)
     )
     rule = FUZZY_RULE if agreeing and not conflicts else FUZZY_NAME_RULE
     names = ("name_normalized", left.name_normalized or "", right.name_normalized or "")
-    return FuzzyMatch(
+    return MatchCandidateData(
         left=left.id,
         right=right.id,
         rule=rule,
-        score=round(score, 3),
         fields=(("name_similarity", f"{score:.3f}"), *agreeing),
+        score=score,
         sides=(names, *conflicts),
     )
 
@@ -214,7 +192,7 @@ def _tenant_matches(
     excluded_domains: frozenset[str],
     known_pairs: Collection[Pair],
     config: FuzzyConfig,
-) -> list[FuzzyMatch]:
+) -> list[MatchCandidateData]:
     by_id = {record.id: record for record in records}
     matches = []
     for pair in sorted(candidate_pairs(records, config).pairs):
@@ -233,7 +211,7 @@ def fuzzy_matches(
     excluded_domains: frozenset[str],
     known_pairs: Collection[Pair] = frozenset(),
     config: FuzzyConfig | None = None,
-) -> list[FuzzyMatch]:
+) -> list[MatchCandidateData]:
     """Tier 2 matches between current organization records, skipping known_pairs.
 
     known_pairs are ordered (smaller id first), like the pairs Tier 1 classified.

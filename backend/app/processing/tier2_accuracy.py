@@ -8,8 +8,9 @@ from dataclasses import dataclass, field
 
 from app.models import SourceRecord
 from app.processing.clustering import member_from_record, plan_clusters
-from app.processing.entity_resolution import blocked_matches, fuzzy_edges, load_generic_domains
+from app.processing.entity_resolution import blocked_matches, load_generic_domains
 from app.processing.fuzzy_config import FuzzyConfig
+from app.processing.fuzzy_matching import fuzzy_matches
 
 # Name tokens at least this long get the typo, so short words stay readable.
 TYPO_MIN_TOKEN_LENGTH = 5
@@ -30,7 +31,7 @@ def tier2_grouping(records: Sequence[SourceRecord], config: FuzzyConfig) -> Grou
     excluded = load_generic_domains()
     members = {record.id: member_from_record(record, excluded) for record in records}
     tier1 = blocked_matches(records, excluded)
-    tier2 = fuzzy_edges(records, excluded, tier1, config)
+    tier2 = fuzzy_matches(records, excluded, {edge.providePair for edge in tier1}, config)
     plan = plan_clusters(members, tier1 + tier2, {})
     cut = {edge.providePair for edge in plan.candidates}
     owner = {record_id: index for index, c in enumerate(plan.clusters) for record_id in c.members}

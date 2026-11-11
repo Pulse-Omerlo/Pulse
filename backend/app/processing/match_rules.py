@@ -4,18 +4,19 @@
 from dataclasses import dataclass
 from uuid import UUID
 
-from app.processing.fuzzy_matching import (
-    FUZZY_NAME_RULE,
-    FUZZY_RULE,
-    FUZZY_RULE_VERSION,
-    FUZZY_RULES,
-)
-
 # Version of the rules, stored with each decision.
 RULE_VERSION = "tier1-v1"
 
 # Strong rules from highest to lowest priority; a pair takes the first one that matches.
 RULE_PRIORITIES = ("domain", "linkedin", "external_id", "name_city")
+
+# Tier 2 rules, versioned on their own.
+FUZZY_RULE_VERSION = "tier2-v1"
+# Similar names with enough agreeing evidence and no conflict: may be linked.
+FUZZY_RULE = "fuzzy"
+# Similar names without enough evidence: only ever proposed for review.
+FUZZY_NAME_RULE = "fuzzy_name"
+FUZZY_RULES = frozenset({FUZZY_RULE, FUZZY_NAME_RULE})
 
 # Weight of each rule, used as a link's confidence and a candidate's score.
 RULE_WEIGHTS = {
