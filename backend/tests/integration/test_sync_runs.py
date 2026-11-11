@@ -1,6 +1,9 @@
 # AI contribution: 50% or more AI-generated
 """Sync runs against the mock Omerlo server and a real database."""
 
+import copy
+import json
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -11,15 +14,28 @@ from sqlalchemy.orm import Session
 from app import sync as sync_command
 from app.ingestion.connector import parse_timestamp
 from app.ingestion.omerlo.connector import OmerloConnector
-from app.models import IndustryClassification, RecordChange, Source, SourceRecord, SyncRun, Tenant
+from app.match import match_run
+from app.models import (
+    IndustryClassification,
+    MatchCandidate,
+    Organization,
+    OrgLink,
+    RecordChange,
+    Source,
+    SourceRecord,
+    SyncRun,
+    Tenant,
+)
 from app.models import RawRecord as RawRecordRow
+from app.processing.entity_resolution import MatchResult, match_organizations
 from app.seed import seed
+from app.services import sync_runs
 from app.services.sync_runs import OmerloReader, run_sync
 from app.storage.local import LocalArchive
 from synthetic.fixture_loader import load_fixtures
 from synthetic.mock_omerlo import api_key_for, create_app
 from synthetic.mutate import DEMO, apply_set
-from synthetic.omerlo_fixtures import OmerloFixtureGenerator, write_fixtures
+from synthetic.omerlo_fixtures import OmerloFixtureGenerator, iso, write_fixtures
 from tests.fixture_diff import assert_fields_correspond, expected
 from tests.synthetic.conftest import SMALL
 
@@ -400,3 +416,139 @@ def test_a_sync_classifies_every_current_organization(session, sync):
     assert run.status == "succeeded"
     assert organizations
     assert set(classified) == set(organizations)
+
+
+def row_count(session: Session, model) -> int:
+    return session.scalar(select(func.count()).select_from(model))
+
+
+def organization_of_each_record(session: Session) -> dict[str, uuid.UUID]:
+    """Map each linked current record (by external id) to its organization id."""
+    query = (
+        select(SourceRecord.external_id, OrgLink.organization_id)
+        .join(OrgLink, OrgLink.source_record_id == SourceRecord.id)
+        .where(SourceRecord.valid_to.is_(None))
+    )
+    result = {}
+    for external_id, organization_id in session.execute(query):
+        result[external_id] = organization_id
+    return result
+
+
+def records_with_a_domain(session: Session) -> set[str]:
+    query = select(SourceRecord.external_id).where(
+        SourceRecord.valid_to.is_(None), SourceRecord.domain.is_not(None)
+    )
+    return set(session.scalars(query))
+
+
+def add_copy_of_organization(fixtures, external_id: str) -> str:
+    """Add a copy of an organization with a new id, newer than every other record."""
+    path = fixtures / SLUG / "organizations.json"
+    records = json.loads(path.read_text(encoding="utf-8"))
+
+    newest = None
+    new_record = None
+    for record in records:
+        updated_at = parse_timestamp(record["updated_at"])
+        if newest is None or updated_at > newest:
+            newest = updated_at
+        if record["id"] == external_id:
+            new_record = copy.deepcopy(record)
+
+    new_id = str(uuid.uuid4())
+    new_record["id"] = new_id
+    new_record["profile"]["id"] = new_id
+    new_record["inserted_at"] = iso(newest + timedelta(minutes=1))
+    new_record["updated_at"] = new_record["inserted_at"]
+    records.append(new_record)
+    path.write_text(json.dumps(records), encoding="utf-8")
+    return new_id
+
+
+def test_each_sync_matches_the_records_it_created_or_changed(session, source, sync, fixtures):
+    # Arrange
+    full = sync(full=True)
+    before = organization_of_each_record(session)
+    diff = apply_set(fixtures, DEMO)["tenants"][SLUG]
+    edited_or_deleted = ids_of(diff["modified"]) | ids_of(diff["removed"])
+
+    # Pick an organization whose records the mutation does not edit or delete.
+    edited_organizations = set()
+    for external_id in edited_or_deleted:
+        if external_id in before:
+            edited_organizations.add(before[external_id])
+    original = None
+    for external_id in sorted(records_with_a_domain(session)):
+        if external_id in before and before[external_id] not in edited_organizations:
+            original = external_id
+            break
+    copy_id = add_copy_of_organization(fixtures, original)
+
+    # Act
+    incremental = sync()
+
+    # Assert
+    # The full sync linked every record it matched.
+    assert len(before) > 0
+    assert full.counts["matching"]["links_created"] == len(before)
+    assert full.counts["matching"]["organizations_created"] == row_count(session, Organization)
+
+    # The incremental sync linked the copy to the same organization as the original.
+    after = organization_of_each_record(session)
+    assert after[copy_id] == before[original]
+    assert after[original] == before[original]
+    assert incremental.counts["matching"]["links_created"] >= 1
+
+    # Records the mutation did not touch keep their organization.
+    for external_id, organization_id in before.items():
+        if external_id not in edited_or_deleted:
+            assert after[external_id] == organization_id
+
+    # Matching the whole tenant again finds nothing new.
+    assert match_organizations(session, source.tenant_id) == MatchResult()
+
+
+def test_a_sync_with_no_source_changes_matches_nothing(session, sync):
+    # Arrange
+    sync(full=True)
+    links_before = row_count(session, OrgLink)
+    candidates_before = row_count(session, MatchCandidate)
+
+    # Act
+    run = sync()
+
+    # Assert
+    assert run.counts["matching"] == {
+        "organizations_created": 0,
+        "organizations_merged": 0,
+        "links_created": 0,
+        "candidates_created": 0,
+    }
+    assert row_count(session, OrgLink) == links_before
+    assert row_count(session, MatchCandidate) == candidates_before
+
+
+def test_a_failed_matching_keeps_the_records_and_can_be_run_again(session, sync, monkeypatch):
+    # Arrange
+    def failing_matcher(*args):
+        raise RuntimeError("matcher crashed")
+
+    monkeypatch.setattr(sync_runs, "match_organizations", failing_matcher)
+    run = sync(full=True)
+    monkeypatch.undo()
+    saved_error = run.counts["matching"]
+    links_before = row_count(session, OrgLink)
+
+    # Act
+    result = match_run(session, run.id)
+
+    # Assert
+    assert saved_error == {"error": "RuntimeError: matcher crashed"}
+    assert links_before == 0
+    assert run.status == "succeeded"
+    assert run.counts["new"] == version_count(session)
+    assert result.links_created > 0
+    assert result.links_created == row_count(session, OrgLink)
+    session.refresh(run)
+    assert run.counts["matching"]["links_created"] == result.links_created
