@@ -165,6 +165,12 @@ def classified(mocker):
     )
 
 
+@pytest.fixture(autouse=True)
+def measured(mocker):
+    """The sector mix computed after a successful sync, mocked."""
+    return mocker.patch.object(sync_runs, "measure_sector_mix")
+
+
 @pytest.fixture
 def stored(mocker):
     """The archive and the versioned upsert, mocked."""
@@ -215,8 +221,8 @@ def test_a_successful_run_records_its_counts_and_advances_the_watermarks(session
     }
     assert target.workspace_watermarks == {"ws-1": {"organization": T1.isoformat()}}
     assert detected == [(session, run)]
-    # Start, archive, store, then the classification.
-    assert session.commit.call_count == 4
+    # Start, archive, store, then the classification and the sector mix.
+    assert session.commit.call_count == 5
 
 
 def test_an_incremental_run_never_marks_records_removed(session, stored):
@@ -423,6 +429,60 @@ def test_a_failed_run_classifies_nothing(session, stored, classified):
 def test_a_failed_classification_leaves_the_run_succeeded(session, stored, classified):
     # Arrange
     classified.side_effect = ValueError("invalid sectors for category 'abc'")
+
+    # Act
+    run = run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    # Assert
+    assert run.status == "succeeded"
+    session.rollback.assert_called_once()
+
+
+def test_a_successful_run_measures_the_sector_mix_after_classifying(
+    session, stored, classified, measured, mocker
+):
+    # Arrange
+    steps = mocker.Mock()
+    steps.attach_mock(classified, "classify")
+    steps.attach_mock(measured, "measure")
+
+    # Act
+    run = run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    # Assert
+    assert [call[0] for call in steps.mock_calls] == ["classify", "measure"]
+    measured.assert_called_once_with(session, run)
+
+
+def test_a_failed_run_measures_nothing(session, stored, measured):
+    # Arrange
+    _, upsert, _ = stored
+    upsert.side_effect = RuntimeError("database went away")
+
+    # Act
+    run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    # Assert
+    measured.assert_not_called()
+
+
+def test_the_sector_mix_is_measured_even_when_classification_fails(
+    session, stored, classified, measured
+):
+    # Arrange
+    classified.side_effect = ValueError("invalid sectors for category 'abc'")
+
+    # Act
+    run = run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    # Assert
+    assert run.status == "succeeded"
+    measured.assert_called_once()
+
+
+def test_a_failed_sector_mix_leaves_the_run_succeeded(session, stored, measured):
+    # Arrange
+    measured.side_effect = ValueError("tenant.toml: unknown sector '99'")
 
     # Act
     run = run_sync(session, source(), org_reader(), archive=None, now=clock())
