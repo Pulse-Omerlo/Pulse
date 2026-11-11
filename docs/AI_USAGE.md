@@ -54,6 +54,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | CSV and JSON file import | #24 | |
 | Industry classification of organizations | #149 | |
 | Merging organizations joined by a chain of matches | #108 | |
+| Tier 2 fuzzy matching of organizations | #111 | |
 
 ## Details
 
@@ -227,3 +228,54 @@ planned `fuzzy` one. It now uses the same sort key as the clustering.
   win the display name vote over real names.
 - Sites on shared hosts (`x.wixsite.com` keeps only `wixsite.com`) chained
   unrelated organizations; those hosts are now generic domains.
+
+### Tier 2 fuzzy matching of organizations (#111)
+
+Claude Code wrote the fuzzy matching settings and their validation, the
+blocking, scoring and link or review decision in `fuzzy_matching.py`, the
+migration that allows `fuzzy` links, the hard variant in the accuracy report,
+and the hook-up into the #108 planner: a fuzzy edge adds one unlinked record to
+a member that is not tentative, records placed through a fuzzy match stay
+tentative (a marker in the link evidence carries this to the next sync) and
+cannot merge organizations, each record is linked through its strongest kept
+edge, and equally close fuzzy edges into two groups attach the record to
+neither. It also ran the threshold sweep used to pick the default, and the
+near-miss negatives and timings asked for in review.
+
+**Verification:** unit tests cover the settings file, near misses (one letter
+apart in the only distinctive word, different numbers, generic words only),
+the inclusive threshold, each secondary signal and each conflict, the evidence a
+spelling, word order or ending difference needs, blocking, oversized blocks
+(split, then windowed, with comparisons counted) and the evidence of each side.
+Integration tests run `match_organizations` for a link, a review candidate, a
+rejected pair, a record joining an existing organization, two organizations
+that must not be merged, manual links, a new record bridging two organizations
+through a fuzzy member in one sync and over two syncs, Tier 1 records keeping
+Tier 1 links whatever the record ids, and the same records arriving in one or
+two syncs, and run the migration down and up.
+
+**Problems found:**
+- The first scorer compared names with generic words removed. A typo inside a
+  generic word ("pharmacei") then counted as distinctive and hid the match.
+  Each distinctive word now has to be spelled closely somewhere in the other
+  name instead.
+- `token_set_ratio` gives 100 when one name's words are a subset of the other's
+  ("tremblay" and "boulangerie tremblay") and made 4 false links on the hard
+  variant, so the scorer stayed `token_sort_ratio`.
+- The typo helper of the hard variant crashed on names with no long word; a
+  unit test found it.
+- The first migration test left a fuzzy link committed, so the fixture's
+  downgrade to base stopped on it. The downgrade now deletes fuzzy links and
+  the organizations they leave empty, like revisions 0004 and 0007.
+- Team review found that one letter of difference in a surname plus a shared
+  city auto-linked distinct businesses (Martin and Marin), that oversized
+  blocks were dropped without a trace, and that fuzzy candidates outranked
+  Tier 1 ones. Each is fixed and tested; the hard report now adds near-miss
+  negatives so the threshold sweep shows false positives.
+- The first near-miss negatives sometimes reused a name the tenant already
+  had, which Tier 1 then matched. Such names are now skipped.
+- A second review of the planner found that fuzzy edges chained (Marin,
+  Martin, Martine in one organization), that a new record could merge two
+  organizations through a fuzzy-linked member, in one sync or two, that a
+  Tier 1 record could be saved with a fuzzy link when the fuzzy record had the
+  smallest id, and that equal scores were decided by id order. Each has a test.
