@@ -211,3 +211,19 @@ as before.
 **Problem found:** `blocked_matches` sorted matches with
 `RULE_PRIORITIES.index`, which would have raised on any new rule such as the
 planned `fuzzy` one. It now uses the same sort key as the clustering.
+
+**Problems found in review** (the first generated version had all of these):
+- An organization whose members already disagreed (two domains linked by a
+  reviewer, or a member whose domain changed) could never gain a record, so
+  new matches formed a duplicate organization. Only a disagreement that a join
+  adds is now blocked.
+- A record sharing a domain with two subsidiaries on different LinkedIn pages
+  joined whichever had the smaller id. It now joins neither.
+- A removed record that came back after a merge kept a link to the merged
+  organization. Copying a link now follows `merged_into`.
+- The conflict check rescanned every member on each edge, so 800 records on
+  one domain took minutes to plan.
+- A reviewer's organization name was overwritten, and an external id could
+  win the display name vote over real names.
+- Sites on shared hosts (`x.wixsite.com` keeps only `wixsite.com`) chained
+  unrelated organizations; those hosts are now generic domains.
