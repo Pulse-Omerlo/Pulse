@@ -23,6 +23,8 @@ class Grouping:
     groups: list[set[str]] = field(default_factory=list)
     tier2_linked: int = 0
     tier2_review: int = 0
+    # Pairs that the bounded blocking did not compare.
+    pairs_left_out: int = 0
 
 
 def tier2_grouping(records: Sequence[SourceRecord], config: FuzzyConfig) -> Grouping:
@@ -31,7 +33,8 @@ def tier2_grouping(records: Sequence[SourceRecord], config: FuzzyConfig) -> Grou
     excluded = load_generic_domains()
     members = {record.id: member_from_record(record, excluded) for record in records}
     tier1 = blocked_matches(records, excluded)
-    tier2 = fuzzy_matches(records, excluded, {edge.providePair for edge in tier1}, config)
+    result = fuzzy_matches(records, excluded, {edge.providePair for edge in tier1}, config)
+    tier2 = list(result.matches)
     plan = plan_clusters(members, tier1 + tier2, {})
     cut = {edge.providePair for edge in plan.candidates}
     owner = {record_id: index for index, c in enumerate(plan.clusters) for record_id in c.members}
@@ -45,6 +48,7 @@ def tier2_grouping(records: Sequence[SourceRecord], config: FuzzyConfig) -> Grou
         groups=[{by_id[key].external_id for key in cluster.members} for cluster in plan.clusters],
         tier2_linked=linked,
         tier2_review=review,
+        pairs_left_out=result.blocking.pairs_left_out,
     )
 
 

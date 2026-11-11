@@ -11,6 +11,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.logging import get_logger
 from app.core.tenancy import bound_to_tenant
 from app.models import MatchCandidate, Organization, OrgLink, SourceRecord, Tenant
 from app.models.resolution import RuleEvidence
@@ -24,7 +25,7 @@ from app.processing.clustering import (
     organization_domain,
     plan_clusters,
 )
-from app.processing.fuzzy_matching import fuzzy_matches
+from app.processing.fuzzy_matching import FuzzyResult, fuzzy_matches
 
 # Rule names stay importable from here for existing callers.
 from app.processing.match_rules import RULE_PRIORITIES as RULE_PRIORITIES
@@ -39,6 +40,8 @@ from app.processing.match_rules import (
     rule_set_version,
     strength_key,
 )
+
+logger = get_logger(__name__)
 
 # Get the domains from the config file
 GENERIC_DOMAINS_PATH = Path(__file__).with_name("generic_domains.toml")
@@ -204,6 +207,19 @@ def evidence(match: MatchCandidateData, matched_record_id: UUID) -> list[RuleEvi
         }
         for field, value, matched_value in values
     ]
+
+
+def log_tier2(tenant_id: UUID, result: FuzzyResult) -> None:
+    """How much Tier 2 compared, and what its bounds left out, for big tenants."""
+    logger.info(
+        "tier2_matching",
+        tenant_id=str(tenant_id),
+        matches=len(result.matches),
+        comparisons=result.comparisons,
+        split_blocks=result.blocking.split_blocks,
+        windowed_blocks=result.blocking.windowed_blocks,
+        pairs_left_out=result.blocking.pairs_left_out,
+    )
 
 
 # State of one matching run: the rows it loaded and what it wrote so far.
@@ -394,7 +410,9 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
         generic_domains = load_generic_domains()
         matches = blocked_matches(records.values(), generic_domains)
         tier1_pairs = {match.providePair for match in matches}
-        matches += fuzzy_matches(records.values(), generic_domains, tier1_pairs)
+        tier2 = fuzzy_matches(records.values(), generic_domains, tier1_pairs)
+        log_tier2(tenant_id, tier2)
+        matches += tier2.matches
         plan = plan_clusters(
             {key: member_from_record(record, generic_domains) for key, record in records.items()},
             matches,

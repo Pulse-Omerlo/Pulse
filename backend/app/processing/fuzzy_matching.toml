@@ -13,9 +13,11 @@ prefix_length = 4
 # min_common_count records) is too common to block on.
 max_token_share = 0.1
 min_common_count = 10
-# A block with more records than this is not expanded, so a common key cannot make
-# the comparison quadratic in the tenant size.
+# A block with more records than this is split by city and word prefix. A split block
+# still over it compares each record with the next window_size records in name order,
+# so a common key cannot make the work quadratic in the tenant size.
 max_block_size = 50
+window_size = 10
 # Only the first words of a name are compared word by word, so a very long name cannot
 # make one comparison slow.
 max_name_words = 12

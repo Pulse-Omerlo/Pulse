@@ -17,6 +17,7 @@ from app.processing.tier2_accuracy import hard_variant, tier2_grouping
 from synthetic.omerlo_fixtures import DEFAULT_SEED, OmerloFixtureGenerator
 
 HEADER = "DEV ONLY: synthetic data, not the official evaluation."
+TIER2_COUNTS = ("linked", "review", "pairs_left_out")
 SWEEP_THRESHOLDS = (0.80, 0.85, 0.86, 0.87, 0.88, 0.89, 0.90, 0.95)
 
 logger = get_logger(__name__)
@@ -64,7 +65,12 @@ def score_tenant(records, expected, config):
     grouping = tier2_grouping(records, config)
     tier1 = score(expected, predicted_pairs(tier1_groups(records)))
     both = score(expected, predicted_pairs(grouping.groups))
-    return tier1, {**both, "linked": grouping.tier2_linked, "review": grouping.tier2_review}
+    return tier1, {
+        **both,
+        "linked": grouping.tier2_linked,
+        "review": grouping.tier2_review,
+        "pairs_left_out": grouping.pairs_left_out,
+    }
 
 
 def tenant_datasets(seed, hard, config):
@@ -83,13 +89,12 @@ def tenant_datasets(seed, hard, config):
 
 def combine_tier2(scores):
     total = combine(scores)
-    linked = sum(tenant_score["linked"] for tenant_score in scores)
-    review = sum(tenant_score["review"] for tenant_score in scores)
-    return {**total, "linked": linked, "review": review}
+    counts = {key: sum(item[key] for item in scores) for key in TIER2_COUNTS}
+    return {**total, **counts}
 
 
 def log_score(tenant, result, event="tier1_score", **fields):
-    extra = {key: result[key] for key in ("linked", "review") if key in result} | fields
+    extra = {key: result[key] for key in TIER2_COUNTS if key in result} | fields
     logger.info(
         event,
         tenant=tenant,

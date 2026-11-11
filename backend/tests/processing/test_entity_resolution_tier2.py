@@ -1,30 +1,15 @@
 # AI contribution: 50% or more AI-generated
 """Tier 2 edges and their evidence in the matcher. No database."""
 
+import json
 from uuid import UUID
 
-from app.models import SourceRecord
+from app.core.logging import configure_logging
 from app.processing import entity_resolution as er
+from app.processing.fuzzy_blocking import BlockingStats
+from app.processing.fuzzy_matching import FuzzyResult
 
 LEFT, RIGHT = UUID(int=1), UUID(int=2)
-
-
-def record(number, name, **fields):
-    return SourceRecord(
-        **(
-            {
-                "id": UUID(int=number),
-                "tenant_id": UUID(int=100),
-                "kind": "organization",
-                "external_id": str(number),
-                "external_ids": {},
-                "attributes": {},
-                "name_normalized": name,
-                "city": "quebec",
-            }
-            | fields
-        )
-    )
 
 
 def fuzzy(score=0.875, rule="fuzzy"):
@@ -70,3 +55,16 @@ def test_tier1_evidence_is_unchanged():
         "matched_value": "a.ca",
         "matched_record_id": str(RIGHT),
     }
+
+
+def test_tier2_work_and_what_it_left_out_are_logged(capsys):
+    # Arrange
+    configure_logging()
+    result = FuzzyResult((fuzzy(),), comparisons=12, blocking=BlockingStats(9, 2, 1, 40))
+    # Act
+    er.log_tier2(UUID(int=100), result)
+    [event] = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    # Assert
+    assert event["event"] == "tier2_matching"
+    assert (event["matches"], event["comparisons"]) == (1, 12)
+    assert (event["split_blocks"], event["windowed_blocks"], event["pairs_left_out"]) == (2, 1, 40)

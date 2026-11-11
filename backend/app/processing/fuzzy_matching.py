@@ -3,12 +3,13 @@
 
 from collections import defaultdict
 from collections.abc import Callable, Collection, Iterable, Sequence
+from dataclasses import dataclass, field
 from uuid import UUID
 
 from rapidfuzz import fuzz
 
 from app.models import SourceRecord
-from app.processing.fuzzy_blocking import candidate_pairs
+from app.processing.fuzzy_blocking import BlockingStats, candidate_pairs
 from app.processing.fuzzy_config import FuzzyConfig, load_fuzzy_config
 from app.processing.fuzzy_profile import Profile, compare_signals, name_profile, profile
 from app.processing.match_rules import FUZZY_NAME_RULE, FUZZY_RULE, MatchCandidateData, Pair
@@ -17,6 +18,20 @@ Scorer = Callable[[str, str], float]
 
 # Measured against ratio, token_set_ratio and WRatio on the synthetic duplicates.
 SCORER: Scorer = fuzz.token_sort_ratio
+
+
+@dataclass(frozen=True)
+class FuzzyResult:
+    matches: tuple[MatchCandidateData, ...] = ()
+    comparisons: int = 0
+    blocking: BlockingStats = field(default_factory=BlockingStats)
+
+    def __add__(self, other: "FuzzyResult") -> "FuzzyResult":
+        return FuzzyResult(
+            self.matches + other.matches,
+            self.comparisons + other.comparisons,
+            self.blocking + other.blocking,
+        )
 
 
 def _agreement(ours: Sequence[str], theirs: Sequence[str]) -> float:
@@ -58,18 +73,21 @@ def decide(left: Profile, right: Profile, similar: float) -> MatchCandidateData:
 
 def _tenant_matches(
     profiles: Sequence[Profile], known_pairs: Collection[Pair], config: FuzzyConfig
-) -> list[MatchCandidateData]:
+) -> FuzzyResult:
     by_id = {item.id: item for item in profiles}
+    blocking = candidate_pairs(profiles, config)
     matches = []
-    for pair in sorted(candidate_pairs(profiles, config).pairs):
+    comparisons = 0
+    for pair in sorted(blocking.pairs):
         left, right = by_id[pair[0]], by_id[pair[1]]
         # Equal names are Tier 1's name rules.
         if pair in known_pairs or left.name == right.name:
             continue
+        comparisons += 1
         similar = score(left, right)
         if similar >= config.threshold:
             matches.append(decide(left, right, similar))
-    return matches
+    return FuzzyResult(tuple(matches), comparisons, blocking.stats)
 
 
 def fuzzy_matches(
@@ -77,7 +95,7 @@ def fuzzy_matches(
     excluded_domains: frozenset[str],
     known_pairs: Collection[Pair] = frozenset(),
     config: FuzzyConfig | None = None,
-) -> list[MatchCandidateData]:
+) -> FuzzyResult:
     """Tier 2 matches between current organization records, skipping known_pairs.
 
     known_pairs are ordered (smaller id first), like the pairs Tier 1 classified.
@@ -87,7 +105,7 @@ def fuzzy_matches(
     for record in records:
         if record.kind == "organization" and record.valid_to is None and record.name_normalized:
             tenants[record.tenant_id].append(profile(record, config, excluded_domains))
-    matches = []
+    result = FuzzyResult()
     for tenant_id in sorted(tenants):
-        matches += _tenant_matches(tenants[tenant_id], known_pairs, config)
-    return matches
+        result += _tenant_matches(tenants[tenant_id], known_pairs, config)
+    return result

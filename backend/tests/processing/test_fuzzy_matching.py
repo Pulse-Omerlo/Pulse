@@ -12,7 +12,7 @@ from tests.processing.fuzzy_helpers import CONFIG, EXCLUDED, record
 
 
 def match_rules(*records, config=CONFIG, known=frozenset()):
-    matches = fm.fuzzy_matches(records, EXCLUDED, known, config)
+    matches = fm.fuzzy_matches(records, EXCLUDED, known, config).matches
     return [(match.providePair, match.rule) for match in matches]
 
 
@@ -124,7 +124,7 @@ def test_two_stores_with_different_identifiers_in_one_city_are_only_reviewed(fie
     left = record(1, "technologies bernier", city="rimouski", **{field: ours})
     right = record(2, "bernier technologies", city="rimouski", **{field: theirs})
     # Act
-    [match] = fm.fuzzy_matches([left, right], EXCLUDED, config=CONFIG)
+    [match] = fm.fuzzy_matches([left, right], EXCLUDED, config=CONFIG).matches
     # Assert
     assert match.rule == "fuzzy_name" and not match.strong
     assert (field, ours, theirs) in match.sides
@@ -155,7 +155,7 @@ def test_match_keeps_its_score_and_evidence():
     left = record(1, "boulangerie tremblay", city="quebec")
     right = record(2, "boulangerie tremblai", city="quebec")
     # Act
-    [match] = fm.fuzzy_matches([right, left], EXCLUDED, config=CONFIG)
+    [match] = fm.fuzzy_matches([right, left], EXCLUDED, config=CONFIG).matches
     # Assert
     assert match.score == 0.875
     assert match.fields == (("name_similarity", "0.875"), ("city", "quebec"))
@@ -193,16 +193,18 @@ def counted_scores(monkeypatch):
     return calls
 
 
-def test_block_over_the_cap_is_never_scored_pair_by_pair(monkeypatch):
+def test_comparisons_in_an_oversized_block_stay_bounded_and_are_counted(monkeypatch):
     # Arrange
-    config = replace(CONFIG, max_block_size=50, min_common_count=1000)
-    records = [record(n, f"tremblay {n}") for n in range(1, 201)]
+    config = replace(CONFIG, max_block_size=50, window_size=10, min_common_count=1000)
+    records = [record(n, f"tremblay {n:03d}") for n in range(1, 201)]
     calls = counted_scores(monkeypatch)
     # Act
-    matches = fm.fuzzy_matches(records, EXCLUDED, config=config)
+    result = fm.fuzzy_matches(records, EXCLUDED, config=config)
     # Assert
     # 200 records in one block would be 19,900 comparisons.
-    assert calls == [] and matches == []
+    assert result.comparisons == len(calls) <= 200 * config.window_size
+    assert result.blocking.windowed_blocks == 1 and result.blocking.pairs_left_out > 0
+    assert result.matches == ()
 
 
 def test_records_in_several_shared_blocks_are_scored_once(monkeypatch):
