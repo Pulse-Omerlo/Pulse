@@ -13,6 +13,8 @@ import {
   type Tenant,
 } from "../../services/api";
 import { ErrorMessage } from "../ErrorMessage";
+import { GoalsView } from "../goals/GoalsView";
+import { OrganizationsView } from "../organizations/OrganizationsView";
 import { ChangeList } from "./ChangeList";
 import { RecordHistoryPanel } from "./RecordHistoryPanel";
 import { RunList } from "./RunList";
@@ -28,6 +30,7 @@ export function SyncRunsPage() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<RecordSummary[] | null>(null);
   const [error, setError] = useState<unknown>(null);
+  const [view, setView] = useState<"goals" | "runs" | "organizations">("runs");
 
   const selectRun = (selected: SyncRun | null, tenant: string | null = tenantId) => {
     setRun(selected);
@@ -92,6 +95,51 @@ export function SyncRunsPage() {
             ))}
           </select>
         </label>
+        <div className="filters" role="group" aria-label="View">
+          <button
+            type="button"
+            aria-pressed={view === "goals"}
+            className={view === "goals" ? "filter active" : "filter"}
+            onClick={() => {
+              setView("goals");
+              setHistory(null);
+            }}
+          >
+            Goals
+          </button>
+          <button
+            type="button"
+            aria-pressed={view === "runs"}
+            className={view === "runs" ? "filter active" : "filter"}
+            onClick={() => {
+              setView("runs");
+              setHistory(null);
+            }}
+          >
+            Sync runs
+          </button>
+          <span className="flow" aria-label="Events contain organizations, which contain people">
+            <button type="button" className="filter" disabled title="Coming soon">
+              Events
+            </button>
+            <span aria-hidden="true">›</span>
+            <button
+              type="button"
+              aria-pressed={view === "organizations"}
+              className={view === "organizations" ? "filter active" : "filter"}
+              onClick={() => {
+                setView("organizations");
+                setHistory(null);
+              }}
+            >
+              Organizations
+            </button>
+            <span aria-hidden="true">›</span>
+            <button type="button" className="filter" disabled title="Coming soon">
+              People
+            </button>
+          </span>
+        </div>
         <form onSubmit={search} role="search">
           <input
             type="search"
@@ -126,28 +174,38 @@ export function SyncRunsPage() {
         </section>
       )}
 
-      <div className="columns">
-        <aside>
-          <h2>Sync runs</h2>
-          <RunList runs={runs} selectedId={run?.id ?? null} onSelect={(r) => selectRun(r)} />
-        </aside>
-        <section className="details">
-          {history ? (
-            <RecordHistoryPanel history={history} runs={runs} onClose={() => setHistory(null)} />
-          ) : run ? (
-            <>
-              <h2>What changed in this run</h2>
-              {changes === null ? (
-                <p className="muted">Loading changes...</p>
-              ) : (
-                <ChangeList changes={changes} onOpenRecord={openRecord} />
-              )}
-            </>
-          ) : (
-            <p className="empty">Select a sync run to see what changed.</p>
-          )}
-        </section>
-      </div>
+      {view === "goals" ? (
+        <GoalsView />
+      ) : view === "organizations" && tenantId ? (
+        history ? (
+          <RecordHistoryPanel history={history} runs={runs} onClose={() => setHistory(null)} />
+        ) : (
+          <OrganizationsView key={tenantId} tenantId={tenantId} onOpenRecord={openRecord} />
+        )
+      ) : (
+        <div className="columns">
+          <aside>
+            <h2>Sync runs</h2>
+            <RunList runs={runs} selectedId={run?.id ?? null} onSelect={(r) => selectRun(r)} />
+          </aside>
+          <section className="details">
+            {history ? (
+              <RecordHistoryPanel history={history} runs={runs} onClose={() => setHistory(null)} />
+            ) : run ? (
+              <>
+                <h2>What changed in this run</h2>
+                {changes === null ? (
+                  <p className="muted">Loading changes...</p>
+                ) : (
+                  <ChangeList changes={changes} onOpenRecord={openRecord} />
+                )}
+              </>
+            ) : (
+              <p className="empty">Select a sync run to see what changed.</p>
+            )}
+          </section>
+        </div>
+      )}
     </div>
   );
 }

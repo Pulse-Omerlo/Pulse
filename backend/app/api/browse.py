@@ -9,9 +9,11 @@ from fastapi import APIRouter, Depends, Path, Query
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
+from app.api.pagination import PageParams
 from app.core.database import DatabaseNotConfiguredError, get_db
 from app.core.errors import DatabaseUnavailableError
 from app.core.tenancy import bound_to_tenant, system_access
+from app.models.changes import CHANGE_TYPES
 from app.models.records import ENTITY_KINDS
 from app.schemas.browse import (
     ChangeOut,
@@ -22,6 +24,7 @@ from app.schemas.browse import (
     VersionEvent,
     VersionOut,
 )
+from app.schemas.pagination import Page
 from app.services import browse
 
 router = APIRouter(prefix="/api/tenants", tags=["browse"])
@@ -45,6 +48,7 @@ def tenant_database(tenant_id: uuid.UUID, db: Db) -> Iterator[Session]:
 
 
 TenantDb = Annotated[Session, Depends(tenant_database)]
+ChangeType = Annotated[str | None, Query(pattern="^(" + "|".join(CHANGE_TYPES) + ")$")]
 Kind = Annotated[str | None, Query(pattern="^(" + "|".join(ENTITY_KINDS) + ")$")]
 ExternalId = Annotated[str, Path(min_length=1, max_length=200)]
 
@@ -58,19 +62,29 @@ def list_tenants(db: Db):
         ]
 
 
-@router.get("/{tenant_id}/runs", response_model=list[SyncRunOut])
-def list_runs(tenant_id: uuid.UUID, db: TenantDb):
+@router.get("/{tenant_id}/runs", response_model=Page[SyncRunOut])
+def list_runs(tenant_id: uuid.UUID, db: TenantDb, paging: PageParams):
     browse.get_tenant(db, tenant_id)
-    return [
-        SyncRunOut.model_validate(run, from_attributes=True)
-        for run in browse.list_runs(db, tenant_id)
-    ]
+    runs, total = browse.list_runs(db, tenant_id, paging)
+    return Page(
+        items=[SyncRunOut.model_validate(run, from_attributes=True) for run in runs],
+        total=total,
+        page=paging.page,
+        page_size=paging.page_size,
+    )
 
 
-@router.get("/{tenant_id}/runs/{run_id}/changes", response_model=list[ChangeOut])
-def run_changes(tenant_id: uuid.UUID, run_id: uuid.UUID, db: TenantDb):
+@router.get("/{tenant_id}/runs/{run_id}/changes", response_model=Page[ChangeOut])
+def run_changes(
+    tenant_id: uuid.UUID,
+    run_id: uuid.UUID,
+    db: TenantDb,
+    paging: PageParams,
+    change_type: ChangeType = None,
+):
     browse.get_tenant(db, tenant_id)
-    return [
+    rows, total = browse.run_changes(db, tenant_id, run_id, paging, change_type=change_type)
+    items = [
         ChangeOut(
             change_type=change.change_type,
             kind=record.kind,
@@ -79,8 +93,9 @@ def run_changes(tenant_id: uuid.UUID, run_id: uuid.UUID, db: TenantDb):
             label=browse.label(record),
             changed_fields=change.changed_fields,
         )
-        for change, record in browse.run_changes(db, tenant_id, run_id)
+        for change, record in rows
     ]
+    return Page(items=items, total=total, page=paging.page, page_size=paging.page_size)
 
 
 @router.get("/{tenant_id}/records", response_model=list[RecordOut])

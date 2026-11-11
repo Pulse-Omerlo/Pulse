@@ -59,10 +59,12 @@ def test_runs_are_listed_newest_first_with_their_counts(api, source, two_runs):
     first, second, _ = two_runs
 
     # Act
-    runs = api.get(f"/api/tenants/{source.tenant_id}/runs").json()
+    page = api.get(f"/api/tenants/{source.tenant_id}/runs").json()
+    runs = page["items"]
 
     # Assert
     assert [r["id"] for r in runs] == [str(second.id), str(first.id)]
+    assert (page["total"], page["page"], page["page_size"]) == (2, 1, 50)
     assert [r["mode"] for r in runs] == ["incremental", "full"]
     assert runs[0]["status"] == "succeeded"
     assert runs[0]["counts"]["changes"] == second.counts["changes"]
@@ -74,7 +76,8 @@ def test_run_changes_match_the_recorded_counts_and_carry_field_diffs(api, source
     org_id = modified_organization(diff)
 
     # Act
-    changes = api.get(f"/api/tenants/{source.tenant_id}/runs/{second.id}/changes").json()
+    url = f"/api/tenants/{source.tenant_id}/runs/{second.id}/changes"
+    changes = api.get(url, params={"page_size": 100}).json()["items"]
 
     # Assert
     by_type = {t: [c for c in changes if c["change_type"] == t] for t in ("added", "modified")}
@@ -84,6 +87,38 @@ def test_run_changes_match_the_recorded_counts_and_carry_field_diffs(api, source
     assert org["kind"] == "organization"
     assert org["label"]
     assert all({"before", "after"} <= set(v) for v in org["changed_fields"].values())
+
+
+def test_run_changes_are_paged_and_filtered_by_type(api, source, two_runs):
+    # Arrange
+    _, second, _ = two_runs
+    url = f"/api/tenants/{source.tenant_id}/runs/{second.id}/changes"
+    counts = second.counts["changes"]
+
+    # Act
+    modified = api.get(url, params={"change_type": "modified", "page_size": 100}).json()
+    first = api.get(url, params={"page_size": 2}).json()
+    rest = api.get(url, params={"page": 2, "page_size": 100}).json()
+
+    # Assert
+    assert {c["change_type"] for c in modified["items"]} == {"modified"}
+    assert modified["total"] == counts["modified"]
+    assert first["total"] == sum(counts.values())
+    assert len(first["items"]) == 2
+    keys = [(c["source_id"], c["external_id"]) for c in first["items"]]
+    assert not set(keys) & {(c["source_id"], c["external_id"]) for c in rest["items"]}
+
+
+@pytest.mark.parametrize("params", [{"page_size": 101}, {"page": 0}, {"change_type": "renamed"}])
+def test_invalid_paging_or_filters_are_rejected(api, source, two_runs, params):
+    # Arrange
+    _, second, _ = two_runs
+
+    # Act
+    response = api.get(f"/api/tenants/{source.tenant_id}/runs/{second.id}/changes", params=params)
+
+    # Assert
+    assert response.status_code == 422
 
 
 def test_record_history_shows_each_version_with_its_change(api, source, two_runs):
