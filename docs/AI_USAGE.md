@@ -207,3 +207,28 @@ cases. A test counts the SQL statements of each list and checks that a page of
 **Problem found:** the first query-count test compared the first call with the
 second, but the first call also loads the tenant into the session, so the two
 differed for a reason unrelated to the page size. It now makes one call first.
+
+### Synthetic data pipeline into Omerlo staging (#148)
+
+Claude Code wrote the mixer, the sector-aware generation, the Omerlo sink with
+its tenant guard, retries and report, the three writers (API, external command,
+in-memory fake), the command and the tests. It also looked up the staging ids
+in the CMS and the API, and added the API key's account to the workspace and
+the Employeur block to the Personnes profile type at the author's request.
+
+**Verification:** unit tests with the in-memory writer cover the creation order,
+retries, rejections and the reasons reported, a second run creating nothing,
+records without our external id left alone, the dry run, every guard case and
+an auth error stopping the run. The HTTP writer is tested against mocked routes.
+A test checks that every planned organization name classifies to its planned
+sector, and the default generator output was compared byte for byte before and
+after the refactor. No write to staging has been made yet.
+
+**Problems found:**
+- Omerlo requires social links without a scheme (`www.linkedin.com/...`) while
+  the generator writes `https://`. The payload builder strips it and refuses
+  any other prefix before sending.
+- The staging tenant allows French only, so a mix sets `locales` and the guard
+  refuses a plan with other locales.
+- The API key's account (a personal one) was not a member of the workspace, so it saw
+  no workspace at all; it is now a member.

@@ -153,3 +153,60 @@ Each set writes `expected_diff.<set>.json` next to the fixtures:
 The first set applied copies the files to `.original/`; `--reset` restores them, deletes the expected diffs and removes `.original/`. Sets stack (each diff is against the state before it), but one set cannot be applied twice without a reset. `manifest.json` lists the applied sets under `mutations`.
 
 The mock server started with `--fixtures` reloads them when `manifest.json` changes, which `mutate` and `--reset` write last, so a running mock serves the mutated data without a restart.
+
+## Pipeline: mixes and Omerlo staging
+
+`synthetic.pipeline` builds data from a **mix file** and writes it either as fixture files (for the mock server) or into the Omerlo staging workspace. Use it when you need deliberate sector gaps, for example many tech organizations but few tech people.
+
+```bash
+cd backend
+uv run python -m synthetic.pipeline --mix synthetic/mixes/sector_gaps.toml                      # files in synthetic/out/
+uv run python -m synthetic.pipeline --mix synthetic/mixes/sector_gaps.toml --sink omerlo --dry-run
+uv run python -m synthetic.pipeline --mix synthetic/mixes/sector_gaps.toml --sink omerlo
+```
+
+### Mix files
+
+A mix in `synthetic/mixes/` sets the counts, the share of organizations per NAICS sector, the planted gaps (the share of people in a sector, instead of following the organizations), the duplicate rates and the locales:
+
+```toml
+seed = 490
+organizations = 120
+people = 300
+locales = ["fr"]
+
+[sectors]          # share of organizations, sums to 1
+"54" = 0.25
+"72" = 0.20
+"62" = 0.15
+"81" = 0.40
+
+[gaps]             # share of people
+"54" = 0.03        # 30 organizations, 9 people
+"62" = 0.0         # 18 organizations, nobody
+
+[duplicates]
+organizations = 0.12
+people = 0.04
+```
+
+Organization names come from `SECTOR_PATTERNS` in `vocabulary.py`, so the keyword classifier places each one in its planned sector without a category mapping. Each person works for an organization of their sector. Without a mix, `synthetic.omerlo_fixtures` produces exactly the same files as before.
+
+Every record gets an external id such as `syn-sector-gaps-490-org-0005`, stored in metadata under `pulse_external_id`. The ground truth file adds each organization's sector, each person's employer and the planted gaps.
+
+### Writing to Omerlo staging
+
+`synthetic/targets/omerlo_staging.toml` holds the staging ids (tenant, workspace, profile types, statuses, the Employeur block type). Only `OMERLO_API_KEY` comes from the root `.env`; `OMERLO_BASE_URL` is ignored here, so a run cannot reach production by mistake.
+
+A run:
+
+1. **Guard:** stops before any write unless the host is a test host (never `ca.` or `eu.omerlo.app`), the workspace is visible to the key, the plan's locales are allowed, and no record in the workspace belongs to another tenant.
+2. **Reconcile:** reads the workspace and the metadata of each record. Records with our external id are skipped; records without it are counted as untouched and never changed.
+3. Creates organizations, then people, each followed by its metadata; then links each person to their employer through the Employeur block.
+4. Retries a refused write once, then reports it with Omerlo's reason and moves on. A 401 or 403 stops the run.
+
+Running it twice creates nothing the second time. `--dry-run` does steps 1 and 2 and prints what it would create.
+
+`--writer api` (default) calls the backoffice API. `--writer cli --cli-command "..."` hands each call to an external command instead (for example a CLI with the Omerlo MCP): the command gets the operation name as its last argument and a JSON object on stdin, and prints `{"result": ...}` or `{"error": "...", "status": 400}`.
+
+Exit codes: 0 when everything was written or skipped, 1 when some records were rejected, 2 when the mix or the guard refused the run, 3 when the key was refused.
