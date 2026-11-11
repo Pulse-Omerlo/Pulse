@@ -19,19 +19,24 @@ max_block_size = 50
 
 # Words that describe what an organization does rather than which one it is. They never
 # form a block, and the rest of the name must also be similar for a pair to match, so
-# "Restaurant Chez Marie" and "Restaurant Chez Mario" stay apart. Names are compared
-# after normalization: lowercase, no accents, "&" and "et" become "and".
+# "Restaurant Chez Marie" and "Restaurant Chez Mario" stay apart. Entries are normalized
+# like the names (accents folded, lowercase, "et" read as "and"), so write them as usual.
+# "Canada" is generic: it appears in many unrelated names. City names such as Québec and
+# Montréal stay distinctive: in "Chambre de commerce de Québec" the city is the only word
+# that tells the organization apart.
 generic_tokens = [
   "and", "de", "des", "du", "la", "le", "les", "l", "d", "a", "au", "aux", "en", "et",
   "the", "of", "for",
-  "chez", "fils", "freres", "associes", "partenaires",
-  "groupe", "group", "compagnie", "entreprise", "entreprises", "societe",
+  "chez", "fils", "frères", "associés", "partenaires",
+  "groupe", "group", "compagnie", "entreprise", "entreprises", "société",
   "services", "service", "solutions", "consultants", "consulting", "conseil", "conseils",
-  "boulangerie", "patisserie", "restaurant", "resto", "cafe", "bistro", "bar", "brasserie",
-  "microbrasserie", "epicerie", "marche", "pharmacie", "clinique", "dentaire", "medicale",
-  "garage", "construction", "constructions", "renovation", "renovations", "transport",
-  "transports", "imprimerie", "cabinet", "avocats", "notaires", "comptables",
-  "technologies", "technologie", "tech", "informatique", "media", "medias",
-  "cooperative", "centre", "center", "culturel", "chambre", "commerce", "festival", "ete",
-  "fondation", "foundation", "association", "club", "institut", "ecole",
+  "boulangerie", "boulangeries", "pâtisserie", "pâtisseries", "restaurant", "restaurants",
+  "resto", "café", "bistro", "bar", "brasserie", "microbrasserie", "épicerie", "épiceries",
+  "marché", "dépanneur", "quincaillerie", "pharmacie", "pharmacies", "clinique",
+  "cliniques", "dentaire", "médicale", "garage", "garages", "construction", "constructions",
+  "rénovation", "rénovations", "plomberie", "coiffure", "transport", "transports",
+  "imprimerie", "cabinet", "avocats", "notaires", "comptables", "technologies",
+  "technologie", "tech", "informatique", "média", "médias", "coopérative", "centre",
+  "center", "culturel", "chambre", "commerce", "festival", "fondation", "foundation",
+  "association", "club", "institut", "école", "résidence", "résidences", "canada",
 ]
