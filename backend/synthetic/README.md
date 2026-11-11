@@ -235,3 +235,17 @@ Found while writing the first runs (November 2026):
 - **Pagination:** lists return 25 items by default. `meta.next` is a path from the host, `/api/community/v2/...?after=<cursor>&limit=...&sort_by=...`, that already carries the request's parameters; `app/ingestion/omerlo/pagination.py` follows it as is.
 - **Social links** are stored without a scheme (`www.linkedin.com/...`); the payload builder strips `https://`.
 - **A `{"data": [...]}` body on the metadata PUT** answers 200 and saves nothing: the body is the bare list of entries.
+
+## Viewer
+
+A local page to look at what a pipeline run produced: each sector's share of organizations and people side by side, with the planted gaps marked; the organizations and people of a sector; the planted duplicate pairs; and a check of the data against the run's plan.
+
+```bash
+cd backend
+uv run python -m synthetic.viewer --fixtures synthetic/out/mixes/mix-sector-gaps        # files from --sink files
+uv run python -m synthetic.viewer --omerlo --mix synthetic/mixes/sector_gaps.toml         # the Omerlo test tenant
+```
+
+Then open http://127.0.0.1:8200. The page only calls the viewer's own GET endpoints (`/api/summary`, `/api/sectors`, `/api/organizations?sector=`, `/api/people?sector=&employer=`, `/api/duplicates`, `/api/check`); the server reads the data once at start and binds to 127.0.0.1 only.
+
+With `--omerlo`, the viewer applies the pipeline's tenant guard, reads the workspace through the API key in `.env` (the key never reaches the browser), and keeps only records whose external id belongs to the mix. It reads each person's Employeur block, so the check shows people with no employer or the wrong one. Reading takes about three calls per person, so a full mix takes a minute or two to load. Without `--mix` there is no plan, so the gaps and the check are left out.

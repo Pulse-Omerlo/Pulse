@@ -62,7 +62,10 @@ class FakeWriter:
         if refusal and refusal.times > 0:
             refusal.times -= 1
             raise WriteRejected(refusal.message, refusal.status)
-        summary = {"name": label} if kind == ORGANIZATIONS else {"first_name": label}
+        if kind == ORGANIZATIONS:
+            summary = {"name": label}
+        else:
+            summary = {"first_name": payload["first_name"], "last_name": payload["last_name"]}
         return self.add(kind, workspace_id, {**summary, "profile_image_key": None})
 
     def set_metadata(self, kind: str, record_id: str, entries: list[dict[str, str]]) -> None:

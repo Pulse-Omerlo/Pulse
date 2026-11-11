@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Synthetic data viewer</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10);
+    --orgs: #2a78d6; --people: #eb6834; --good: #006300; --bad: #d03b3b; --warn-bg: #fff4e0;
+    --hover: rgba(42,120,214,0.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10);
+      --orgs: #3987e5; --people: #d95926; --good: #0ca30c; --bad: #e66767; --warn-bg: #2e2513;
+      --hover: rgba(57,135,229,0.14);
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink);
+         font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1120px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .sub { color: var(--ink-2); margin: 0 0 20px; }
+  .card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 16px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tile .label { color: var(--ink-2); font-size: 12px; }
+  .tile .value { font-size: 24px; font-weight: 600; }
+  .tile .note { color: var(--muted); font-size: 12px; }
+  nav { display: flex; gap: 4px; margin-bottom: 12px; border-bottom: 1px solid var(--grid); }
+  nav button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--ink-2);
+               padding: 8px 12px; font: inherit; cursor: pointer; }
+  nav button[aria-selected="true"] { color: var(--ink); border-color: var(--orgs); font-weight: 600; }
+  .legend { display: flex; gap: 16px; color: var(--ink-2); font-size: 12px; margin-bottom: 8px; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+  svg text { fill: var(--ink-2); font-size: 12px; }
+  .row-hit { fill: transparent; cursor: pointer; }
+  .row-hit:hover, .row-hit.on { fill: var(--hover); }
+  .gap-badge { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 4px;
+               background: var(--warn-bg); color: var(--ink); white-space: nowrap; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { color: var(--ink-2); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; }
+  tbody tr.click { cursor: pointer; }
+  tbody tr.click:hover, tbody tr.on { background: var(--hover); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  @media (max-width: 760px) { .two { grid-template-columns: 1fr; } }
+  .scroll { max-height: 420px; overflow: auto; }
+  input[type=search] { width: 100%; padding: 6px 8px; margin-bottom: 8px; border-radius: 6px;
+                       border: 1px solid var(--axis); background: var(--page); color: var(--ink); font: inherit; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--good); font-weight: 600; }
+  .fail { color: var(--bad); font-weight: 600; }
+  .stack > * + * { margin-top: 16px; }
+  #tip { position: fixed; pointer-events: none; background: var(--surface); color: var(--ink);
+         border: 1px solid var(--ring); border-radius: 6px; padding: 6px 8px; font-size: 12px;
+         box-shadow: 0 4px 12px rgba(0,0,0,0.12); display: none; z-index: 10; }
+  .error { color: var(--bad); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Synthetic data viewer</h1>
+  <p class="sub" id="source">Loading...</p>
+  <div class="tiles" id="tiles"></div>
+  <nav role="tablist">
+    <button role="tab" aria-selected="true" data-tab="mix">Sector mix</button>
+    <button role="tab" aria-selected="false" data-tab="dups">Duplicates</button>
+    <button role="tab" aria-selected="false" data-tab="check">Check against the plan</button>
+  </nav>
+
+  <section id="tab-mix" class="stack">
+    <div class="card">
+      <h2 id="mix-title">Share of organizations and people by sector</h2>
+      <div class="legend">
+        <span><span class="swatch" style="background:var(--orgs)"></span>Organizations</span>
+        <span><span class="swatch" style="background:var(--people)"></span>People (by employer)</span>
+      </div>
+      <svg id="chart" width="100%" role="img" aria-labelledby="mix-title"></svg>
+      <p class="muted">Each entity counts once: the second record of a planted duplicate pair is left out. Click a sector to see who is in it.</p>
+    </div>
+    <div class="card">
+      <table id="sector-table"><thead><tr>
+        <th>Sector</th><th class="num">Organizations</th><th class="num">Share</th>
+        <th class="num">People</th><th class="num">Share</th><th>Planted gap</th>
+      </tr></thead><tbody></tbody></table>
+    </div>
+    <div class="two">
+      <div class="card">
+        <h2 id="orgs-title">Organizations</h2>
+        <input type="search" id="orgs-filter" placeholder="Filter by name or city" aria-label="Filter organizations">
+        <div class="scroll"><table id="orgs"><thead><tr>
+          <th>Name</th><th>City</th><th class="num">People</th>
+        </tr></thead><tbody></tbody></table></div>
+      </div>
+      <div class="card">
+        <h2 id="people-title">People</h2>
+        <input type="search" id="people-filter" placeholder="Filter by name or employer" aria-label="Filter people">
+        <div class="scroll"><table id="people"><thead><tr>
+          <th>Name</th><th>Job title</th><th>Employer</th>
+        </tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="tab-dups" hidden>
+    <div class="card">
+      <h2>Planted duplicate pairs</h2>
+      <p class="muted">The same entity spelled the way another source might. Tier 1 or fuzzy matching should pair them.</p>
+      <table id="dups"><thead><tr><th>Kind</th><th>First record</th><th>Second record</th><th>What differs</th></tr></thead><tbody></tbody></table>
+    </div>
+  </section>
+
+  <section id="tab-check" hidden>
+    <div class="card" id="check"></div>
+  </section>
+  <div id="tip" role="tooltip"></div>
+</main>
+<script>
+const $ = (sel) => document.querySelector(sel);
+const pct = (x) => `${Math.round(x * 100)}%`;
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const get = async (path) => {
+  const response = await fetch(path);
+  if (!response.ok) throw new Error(`${path}: HTTP ${response.status}`);
+  return response.json();
+};
+const CHANGES = {
+  suffix: "legal suffix", accents: "accents dropped", case: "letter case", hyphen: "hyphen",
+  ampersand: "& or et", missing_domain: "no website or email", missing_linkedin: "no LinkedIn",
+  missing_crm_id: "no CRM id", missing_email: "no email",
+};
+
+let selected = null;
+let sectors = [];
+
+function tiles(s) {
+  const linked = s.people ? Math.round((s.linked_people / s.people) * 100) : 0;
+  const items = [
+    ["Organizations", s.organizations, `${s.duplicate_pairs.organizations} planted duplicate pairs`],
+    ["People", s.people, `${linked}% linked to an employer`],
+    ["Person duplicate pairs", s.duplicate_pairs.people, "planted"],
+    ["Other records", s.untouched, "in the source, not from this run"],
+  ];
+  $("#tiles").innerHTML = items.map(([label, value, note]) =>
+    `<div class="card tile"><div class="label">${label}</div><div class="value">${value}</div><div class="note">${note}</div></div>`).join("");
+  const mix = s.mix ? `mix ${esc(s.mix)}, seed ${s.seed} · ` : "";
+  $("#source").textContent = `${mix}${s.source}`;
+}
+
+function chart(rows) {
+  const svg = $("#chart");
+  const width = svg.clientWidth || 900;
+  const labelW = Math.min(300, width * 0.38), right = 48, rowH = 40, top = 8, axisH = 24;
+  const max = Math.max(0.1, ...rows.flatMap((r) => [r.organization_share, r.people_share]));
+  const step = max > 0.5 ? 0.2 : 0.1;
+  const end = Math.ceil(max / step) * step;
+  const x = (v) => labelW + (v / end) * (width - labelW - right);
+  const height = top + rows.length * rowH + axisH;
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("height", height);
+  let out = "";
+  for (let t = 0; t <= end + 1e-9; t += step) {
+    out += `<line x1="${x(t)}" x2="${x(t)}" y1="${top}" y2="${top + rows.length * rowH}" stroke="var(--grid)"/>`;
+    out += `<text x="${x(t)}" y="${height - 6}" text-anchor="middle">${pct(t)}</text>`;
+  }
+  rows.forEach((r, i) => {
+    const y = top + i * rowH;
+    const label = r.name.length > 36 ? r.name.slice(0, 35) + "…" : r.name;
+    out += `<rect class="row-hit${r.code === selected ? " on" : ""}" x="0" y="${y}" width="${width}" height="${rowH}" data-code="${esc(r.code)}"><title>${esc(r.code)} ${esc(r.name)}</title></rect>`;
+    out += `<text x="${labelW - 12}" y="${y + rowH / 2 + 4}" text-anchor="end" style="fill:var(--ink)">${esc(label)}${r.planted_gap !== null && r.planted_gap !== undefined ? " ⚑" : ""}</text>`;
+    const bars = [["organizations", r.organization_share, r.organizations, "var(--orgs)", 9],
+                  ["people", r.people_share, r.people, "var(--people)", 21]];
+    for (const [kind, share, count, color, dy] of bars) {
+      const w = Math.max(share > 0 ? 3 : 0, x(share) - labelW);
+      out += `<rect x="${labelW}" y="${y + dy}" width="${w}" height="10" rx="2" fill="${color}" pointer-events="none"/>`;
+      out += `<rect x="${labelW}" y="${y + dy - 1}" width="${width - labelW}" height="12" fill="transparent"
+               data-tip="${esc(r.code)} ${esc(r.name)}&#10;${kind === "organizations" ? "Organizations" : "People"}: ${count} (${pct(share)})" data-code="${esc(r.code)}" style="cursor:pointer"/>`;
+    }
+    if (r.planted_gap !== null && r.planted_gap !== undefined) {
+      out += `<text x="${Math.max(x(r.organization_share), x(r.people_share)) + 8}" y="${y + 30}">${pct(r.organization_share)} of orgs, ${pct(r.people_share)} of people</text>`;
+    }
+  });
+  out += `<line x1="${labelW}" x2="${labelW}" y1="${top}" y2="${top + rows.length * rowH}" stroke="var(--axis)"/>`;
+  svg.innerHTML = out;
+}
+
+function sectorTable(rows) {
+  $("#sector-table tbody").innerHTML = rows.map((r) => `
+    <tr class="click${r.code === selected ? " on" : ""}" data-code="${esc(r.code)}" tabindex="0">
+      <td>${esc(r.code)} · ${esc(r.name)}</td>
+      <td class="num">${r.organizations}</td><td class="num">${pct(r.organization_share)}</td>
+      <td class="num">${r.people}</td><td class="num">${pct(r.people_share)}</td>
+      <td>${r.planted_gap === null || r.planted_gap === undefined ? "" : `<span class="gap-badge">⚑ ${pct(r.planted_gap)} of people planned</span>`}</td>
+    </tr>`).join("");
+}
+
+function showSector(code) {
+  selected = selected === code ? null : code;
+  return render();
+}
+
+async function render() {
+  chart(sectors);
+  sectorTable(sectors);
+  const q = selected ? `?sector=${encodeURIComponent(selected)}` : "";
+  const [orgs, people] = await Promise.all([get(`/api/organizations${q}`), get(`/api/people${q}`)]);
+  const name = selected ? sectors.find((r) => r.code === selected).name : null;
+  $("#orgs-title").textContent = name ? `Organizations in ${name} (${orgs.length})` : `Organizations (${orgs.length})`;
+  $("#people-title").textContent = name ? `People working in ${name} (${people.length})` : `People (${people.length})`;
+  $("#orgs tbody").innerHTML = orgs.map((o) => `
+    <tr data-filter="${esc((o.name + " " + (o.city || "")).toLowerCase())}">
+      <td>${esc(o.name)}${o.duplicate_of ? ' <span class="muted">(duplicate)</span>' : ""}</td>
+      <td>${esc(o.city || "")}</td><td class="num">${o.employees}</td></tr>`).join("")
+    || `<tr><td colspan="3" class="muted">No organization in this sector.</td></tr>`;
+  $("#people tbody").innerHTML = people.map((p) => `
+    <tr data-filter="${esc((p.name + " " + (p.employer_name || "")).toLowerCase())}">
+      <td>${esc(p.name)}${p.duplicate_of ? ' <span class="muted">(duplicate)</span>' : ""}</td>
+      <td>${esc(p.job_title || "")}</td>
+      <td>${p.employer_name ? esc(p.employer_name) : '<span class="muted">not linked</span>'}</td></tr>`).join("")
+    || `<tr><td colspan="3" class="muted">Nobody works in this sector.</td></tr>`;
+  filter("orgs"); filter("people");
+}
+
+function filter(id) {
+  const text = $(`#${id}-filter`).value.trim().toLowerCase();
+  for (const row of document.querySelectorAll(`#${id} tbody tr[data-filter]`)) {
+    row.hidden = text !== "" && !row.dataset.filter.includes(text);
+  }
+}
+
+async function showDuplicates() {
+  const rows = await get("/api/duplicates");
+  $("#dups tbody").innerHTML = rows.map((d) => `
+    <tr><td>${d.kind === "organization" ? "Organization" : "Person"}</td>
+    <td>${esc(d.first)}</td><td>${esc(d.second)}</td>
+    <td>${d.changes.map((c) => esc(CHANGES[c] || c)).join(", ")}</td></tr>`).join("")
+    || `<tr><td colspan="4" class="muted">No planted duplicate in this data.</td></tr>`;
+}
+
+async function showCheck() {
+  const c = await get("/api/check");
+  if (!c.available) {
+    $("#check").innerHTML = `<h2>Check against the plan</h2><p class="muted">No plan for this data. Start the viewer with <code>--mix</code> to compare it with the run that made it.</p>`;
+    return;
+  }
+  const line = (ok, text) => `<p><span class="${ok ? "ok" : "fail"}">${ok ? "✓" : "✕"}</span> ${text}</p>`;
+  const list = (ids) => ids.length ? `<p class="muted">${ids.slice(0, 20).map(esc).join(", ")}${ids.length > 20 ? ` and ${ids.length - 20} more` : ""}</p>` : "";
+  $("#check").innerHTML = `<h2>Check against the plan</h2>
+    <p class="muted">The plan has ${c.planned.organizations} organizations and ${c.planned.people} people.</p>
+    ${line(!c.missing_organizations.length, `${c.missing_organizations.length} planned organizations missing`)}${list(c.missing_organizations)}
+    ${line(!c.missing_people.length, `${c.missing_people.length} planned people missing`)}${list(c.missing_people)}
+    ${line(!c.wrong_employer.length, `${c.wrong_employer.length} people with no employer or the wrong one`)}
+    ${c.wrong_employer.length ? `<table><thead><tr><th>Person</th><th>Expected</th><th>Found</th></tr></thead><tbody>${
+      c.wrong_employer.slice(0, 50).map((w) => `<tr><td>${esc(w.name)}</td><td>${esc(w.expected)}</td><td>${esc(w.found || "none")}</td></tr>`).join("")}</tbody></table>` : ""}
+    ${line(!c.unplanned.length, `${c.unplanned.length} records from this mix that the plan does not list`)}${list(c.unplanned)}
+    <p class="muted">${c.untouched} other record(s) in the source were left out.</p>`;
+}
+
+function tab(name) {
+  for (const b of document.querySelectorAll("nav button")) b.setAttribute("aria-selected", b.dataset.tab === name);
+  for (const t of ["mix", "dups", "check"]) $(`#tab-${t}`).hidden = t !== name;
+  if (name === "dups") showDuplicates();
+  if (name === "check") showCheck();
+}
+
+document.addEventListener("click", (e) => {
+  const tabButton = e.target.closest("nav button");
+  if (tabButton) return tab(tabButton.dataset.tab);
+  const target = e.target.closest("[data-code]");
+  if (target) showSector(target.dataset.code);
+});
+document.addEventListener("keydown", (e) => {
+  const row = e.target.closest?.("tr[data-code]");
+  if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); showSector(row.dataset.code); }
+});
+const tip = $("#tip");
+document.addEventListener("mousemove", (e) => {
+  const target = e.target.closest?.("[data-tip]");
+  if (!target) { tip.style.display = "none"; return; }
+  tip.innerText = target.dataset.tip;
+  tip.style.display = "block";
+  tip.style.left = `${Math.min(e.clientX + 12, innerWidth - tip.offsetWidth - 8)}px`;
+  tip.style.top = `${e.clientY + 12}px`;
+});
+$("#orgs-filter").addEventListener("input", () => filter("orgs"));
+$("#people-filter").addEventListener("input", () => filter("people"));
+addEventListener("resize", () => sectors.length && chart(sectors));
+
+(async () => {
+  try {
+    const [summary, rows] = await Promise.all([get("/api/summary"), get("/api/sectors")]);
+    sectors = rows;
+    tiles(summary);
+    await render();
+  } catch (error) {
+    $("#source").innerHTML = `<span class="error">Could not load the data: ${esc(error.message)}</span>`;
+  }
+})();
+</script>
+</body>
+</html>
