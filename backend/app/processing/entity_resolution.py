@@ -14,6 +14,9 @@ from sqlalchemy.orm import Session, aliased
 from app.core.tenancy import bound_to_tenant
 from app.models import MatchCandidate, Organization, OrgLink, SourceRecord, Tenant
 from app.models.resolution import RuleEvidence
+
+# Rule names and the LinkedIn prefix stay importable from here for existing callers.
+from app.processing.clustering import LINKEDIN_COMPANY_PREFIX as LINKEDIN_COMPANY_PREFIX
 from app.processing.clustering import (
     Cluster,
     LinkFacts,
@@ -24,8 +27,6 @@ from app.processing.clustering import (
     organization_domain,
     plan_clusters,
 )
-
-# Rule names stay importable from here for existing callers.
 from app.processing.match_rules import RULE_PRIORITIES as RULE_PRIORITIES
 from app.processing.match_rules import (
     RULE_VERSION,
@@ -391,7 +392,16 @@ def _apply(run: _Run, cluster: Cluster) -> None:
 
 # Loads a tenant's current organization records and past decisions, plans the clusters, then
 # creates or merges organizations, links and review candidates in the caller's transaction.
-def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
+def has_changed_record(record_ids: Iterable[UUID], changed_ids: set[UUID] | None) -> bool:
+    """Whether one of the records changed; with no changed_ids every record counts."""
+    return changed_ids is None or not changed_ids.isdisjoint(record_ids)
+
+
+# With changed_ids, only clusters and pairs holding one of those records are applied; the other
+# current records are still loaded so the changed ones can be compared to them.
+def match_organizations(
+    session: Session, tenant_id: UUID, changed_ids: set[UUID] | None = None
+) -> MatchResult:
     with bound_to_tenant(session, tenant_id):
         # Serialize matcher invocations for this tenant.
         tenant = session.scalar(select(Tenant).where(Tenant.id == tenant_id).with_for_update())
@@ -421,13 +431,15 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
             _manual_organizations(session, tenant_id),
         )
         for cluster in plan.clusters:
-            _apply(run, cluster)
+            if has_changed_record(cluster.members, changed_ids):
+                _apply(run, cluster)
         _repoint_earlier_merges(run)
         for match in plan.candidates:
-            _add_candidate(run, match)
+            if has_changed_record(match.providePair, changed_ids):
+                _add_candidate(run, match)
 
         for match in matches:
-            if match.strong:
+            if match.strong or not has_changed_record(match.providePair, changed_ids):
                 continue
             left, right = run.links.get(match.left), run.links.get(match.right)
             if left and right and left.organization_id == right.organization_id:

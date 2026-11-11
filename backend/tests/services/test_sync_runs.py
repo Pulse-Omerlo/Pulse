@@ -11,8 +11,10 @@ from app.ingestion.connector import RawRecord
 from app.ingestion.files.connector import FileConnector
 from app.ingestion.mapped import MappedRecord, MappingResult
 from app.models import Source
+from app.processing.entity_resolution import MatchResult
 from app.services import sync_runs
 from app.services.industry import ClassificationReport
+from app.services.link_recheck import LINK_RECHECK_KEY, RecheckResult
 from app.services.source_records import UpsertResult
 from app.services.sync_runs import (
     Fetched,
@@ -165,6 +167,18 @@ def classified(mocker):
     )
 
 
+@pytest.fixture(autouse=True)
+def matched(mocker):
+    """The Tier 1 matching run after a successful sync, mocked."""
+    return mocker.patch.object(sync_runs, "match_organizations", return_value=MatchResult())
+
+
+@pytest.fixture(autouse=True)
+def rechecked(mocker):
+    """Automatic link recheck inside store, mocked."""
+    return mocker.patch.object(sync_runs, "recheck_links", return_value=RecheckResult())
+
+
 @pytest.fixture
 def stored(mocker):
     """The archive and the versioned upsert, mocked."""
@@ -207,16 +221,28 @@ def test_a_successful_run_records_its_counts_and_advances_the_watermarks(session
     assert run.counts == {
         "fetched": 1,
         "cleaning_flags": {},
+        LINK_RECHECK_KEY: {
+            "checked": 0,
+            "kept": 0,
+            "dropped": 0,
+            "unverifiable": 0,
+        },
         "new": 1,
         "changed": 1,
         "unchanged": 2,
         "removed": 1,
         "failed": 0,
+        "matching": {
+            "organizations_created": 0,
+            "organizations_merged": 0,
+            "links_created": 0,
+            "candidates_created": 0,
+        },
     }
     assert target.workspace_watermarks == {"ws-1": {"organization": T1.isoformat()}}
     assert detected == [(session, run)]
-    # Start, archive, store, then the classification.
-    assert session.commit.call_count == 4
+    # Start, archive, store, then the matching and the classification.
+    assert session.commit.call_count == 5
 
 
 def test_an_incremental_run_never_marks_records_removed(session, stored):
@@ -429,4 +455,122 @@ def test_a_failed_classification_leaves_the_run_succeeded(session, stored, class
 
     # Assert
     assert run.status == "succeeded"
+    session.rollback.assert_called_once()
+
+
+def test_a_successful_run_matches_the_versions_it_opened(mocker, session, stored, matched):
+    # Arrange
+    target = source()
+    changed_ids = [uuid.uuid4(), uuid.uuid4()]
+    found_ids = mocker.patch.object(sync_runs, "changed_organization_ids", return_value=changed_ids)
+    matched.return_value = MatchResult(
+        organizations_created=1, links_created=3, candidates_created=2, organizations_merged=2
+    )
+
+    # Act
+    run = run_sync(session, target, org_reader(), archive=None, now=clock())
+
+    # Assert
+    found_ids.assert_called_once_with(session, run)
+    matched.assert_called_once_with(session, target.tenant_id, changed_ids)
+    assert run.counts["matching"] == {
+        "organizations_created": 1,
+        "organizations_merged": 2,
+        "links_created": 3,
+        "candidates_created": 2,
+    }
+
+
+def test_a_failed_run_matches_nothing(session, stored, matched):
+    # Arrange
+    _, upsert, _ = stored
+    upsert.side_effect = RuntimeError("database went away")
+
+    # Act
+    run = run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    # Assert
+    assert run.status == "failed"
+    assert "matching" not in run.counts
+    matched.assert_not_called()
+
+
+def test_a_failed_matching_is_recorded_and_keeps_the_run_and_classification(
+    session, stored, matched, classified
+):
+    # Arrange
+    matched.side_effect = ValueError("generic_domains.toml needs a non-empty domains list")
+
+    # Act
+    run = run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    # Assert
+    assert run.status == "succeeded"
+    assert run.counts["new"] == 1
+    assert run.counts["matching"] == {
+        "error": "ValueError: generic_domains.toml needs a non-empty domains list"
+    }
+    session.rollback.assert_called_once()
+    classified.assert_called_once()
+
+
+def test_recheck_runs_after_close_and_before_detect(session, stored, rechecked):
+    order: list[str] = []
+    _, _, close = stored
+    close.side_effect = lambda *args, **kwargs: order.append("close") or ["o5"]
+    rechecked.side_effect = lambda *args, **kwargs: (
+        order.append("recheck") or RecheckResult(checked=1, kept=0, dropped=1, unverifiable=0)
+    )
+
+    run = run_sync(
+        session,
+        source(),
+        org_reader(),
+        archive=None,
+        full=True,
+        now=clock(),
+        detect_changes=lambda *args: order.append("detect") or {},
+    )
+
+    assert order == ["close", "recheck", "detect"]
+    assert run.counts[LINK_RECHECK_KEY] == {
+        "checked": 1,
+        "kept": 0,
+        "dropped": 1,
+        "unverifiable": 0,
+    }
+    rechecked.assert_called_once()
+    assert rechecked.call_args.args[2] == []
+    assert session.commit.call_count == 5
+
+
+def test_recheck_receives_carried_pairs(session, stored, rechecked):
+    _, upsert, _ = stored
+    carried = [(uuid.uuid4(), uuid.uuid4())]
+    upsert.return_value = UpsertResult(["o1"], carried=carried)
+
+    run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    assert rechecked.call_args.args[2] == carried
+
+
+def test_a_fetch_error_does_not_recheck(session, stored, rechecked):
+    archive, upsert, _ = stored
+    connector = FakeConnector(error=httpx.ConnectError("connection refused"))
+
+    run_sync(session, source(), OmerloReader(connector), archive=None, now=clock())
+
+    rechecked.assert_not_called()
+    archive.assert_not_called()
+    upsert.assert_not_called()
+
+
+def test_a_recheck_error_fails_the_run_and_rolls_store_back(session, stored, rechecked):
+    rechecked.side_effect = RuntimeError("evidence check failed")
+
+    run = run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    assert run.status == "failed"
+    assert run.counts == {**dict.fromkeys(sync_runs.COUNT_KEYS, 0), "fetched": 1}
+    assert "link_recheck" not in run.counts
     session.rollback.assert_called_once()

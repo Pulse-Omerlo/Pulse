@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, json_column, one_of, same_tenant_fk, tenant_id_column, uuid_pk
 
 LINK_METHODS = ("domain", "linkedin", "external_id", "name_city", "manual")
+AUTOMATIC_LINK_METHODS = frozenset(method for method in LINK_METHODS if method != "manual")
 CANDIDATE_STATUSES = ("pending", "accepted", "rejected")
 
 
@@ -52,12 +53,13 @@ class Organization(Base):
 
 
 class OrgLink(Base):
-    """The decision that a source record version belongs to an organization (#61).
+    """The decision that a source record version belongs to an organization.
 
     The version is the primary key, so each version belongs to at most one organization.
-    A new version starts unlinked: versioning (#58) must copy the link to it in the same
-    transaction that closes the old version. Current membership of an organization joins
-    source_record on valid_to IS NULL. The copy keeps the evidence of the original decision.
+    A new version starts unlinked: versioning must copy the link to it in the same
+    transaction that closes the old version. Current membership joins source_record on
+    valid_to IS NULL. Automatic links are re-checked when matching fields change on a
+    new version; the old version keeps its link.
     """
 
     __tablename__ = "org_link"

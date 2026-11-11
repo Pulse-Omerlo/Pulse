@@ -159,6 +159,7 @@ def test_an_unchanged_record_only_moves_last_seen_run(session, runs):
     result = upsert_records(session, second, [org(updated_at="2026-10-02")])
 
     # Assert
+    assert result.carried == []
     assert result.unchanged == ["org-1"]
     [version] = versions(session)
     assert version.first_seen_run == first.id
@@ -177,6 +178,7 @@ def test_a_changed_record_closes_its_version_and_opens_a_new_one(session, runs):
     # Assert
     assert result.changed == ["org-1"]
     old, new = versions(session)
+    assert result.carried == [(old.id, new.id)]
     assert old.valid_to == second.started_at
     assert old.removed_run is None
     assert new.valid_from == second.started_at

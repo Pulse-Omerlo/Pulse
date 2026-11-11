@@ -37,6 +37,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | --- | --- | --- |
 | Claude Code (Anthropic) | AbdelrahmanWM | Writing code and tests from issues, reviewing diffs, drafting PR descriptions and issues |
 | Cursor (agent mode) | mijanullah12 | Designing and writing the file import and its tests from issue #24, drafting commit messages and docs |
+| Cursor (agent mode) | hendriktebeng | Implementing automatic org-link recheck (#110) and its tests |
 
 ## Features built with substantial AI help
 
@@ -54,6 +55,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | CSV and JSON file import | #24 | |
 | Industry classification of organizations | #149 | |
 | Tenant API for organizations, runs and duplicates | #63 | |
+| Recheck automatic organization links on matching-field change | #110 | |
 | Merging organizations joined by a chain of matches | #108 | |
 
 ## Details
@@ -208,6 +210,18 @@ cases. A test counts the SQL statements of each list and checks that a page of
 **Problem found:** the first query-count test compared the first call with the
 second, but the first call also loads the tenant into the session, so the two
 differed for a reason unrelated to the page size. It now makes one call first.
+
+### Recheck automatic organization links (#110)
+
+Cursor wrote the pure matching-field diff and evidence check, the store-time
+service that drops failing automatic `org_link` rows on new versions only, the
+`members_as_of` history helper, and the paired mutation sets used to exercise
+domain, LinkedIn removal and rename. Rematch stays in the existing
+`match_after_sync` path (#109).
+
+**Verification:** unit tests cover field diffs, evidence verdicts and sync
+wiring. Integration tests against Postgres cover drops, empty organizations,
+as-of membership and unchanged old-version links.
 
 ### Merging organizations joined by a chain of matches (#108)
 
