@@ -265,3 +265,15 @@ def test_equally_close_fuzzy_edges_to_two_lone_records_join_none(ids):
     plan = plan_clusters(items, edges, {})
     # Assert
     assert plan.clusters == () and len(plan.candidates) == 2
+
+
+@pytest.mark.parametrize("ids", ID_ORDERS)
+def test_equal_name_and_city_edges_into_two_organizations_still_attach_neither(ids):
+    # Arrange
+    a, c, x = ids
+    items = members(Member(a), Member(c), Member(x))
+    links = {a: LinkFacts(ORG_1), c: LinkFacts(ORG_2)}
+    # Act
+    plan = plan_clusters(items, [edge(x, c, "name_city"), edge(a, x, "name_city")], links)
+    # Assert
+    assert len(plan.candidates) == 2

@@ -150,8 +150,7 @@ def _new_links(
     linked = set(group & links.keys())
     result: list[NewLink] = []
     if not linked:
-        if not edges:
-            return ()
+        # A new organization always has at least one kept edge.
         first = min(edges, key=strength_key)
         result += [
             NewLink(first.left, first, first.right),
