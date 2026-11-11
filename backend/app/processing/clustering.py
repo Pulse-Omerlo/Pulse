@@ -179,6 +179,7 @@ def _initial_groups(
     members: Mapping[UUID, Member],
     links: Mapping[UUID, LinkFacts],
     rejected: Iterable[Pair],
+    manual_organizations: Iterable[UUID],
 ) -> Groups:
     """One group per record, then records already in one organization joined together."""
     rejected_by = defaultdict(set)
@@ -186,6 +187,7 @@ def _initial_groups(
         rejected_by[left].add(right)
         rejected_by[right].add(left)
     manual = {facts.organization_id for facts in links.values() if facts.manual}
+    manual.update(manual_organizations)
     summaries = {}
     for record_id, member in members.items():
         facts = links.get(record_id)
@@ -212,17 +214,19 @@ def plan_clusters(
     edges: Sequence[MatchCandidateData],
     links: Mapping[UUID, LinkFacts],
     rejected: Iterable[Pair] = (),
+    manual_organizations: Iterable[UUID] = (),
 ) -> ClusterPlan:
     """Cluster records with union-find, cutting the edges whose join would break a rule.
 
     Guarantee: no join brings together a rejected pair, organizations that may not merge,
     or two groups that both have values of one identifier and share none of them.
-    Records already in one organization start as one group. Strong edges are applied
+    An organization with a manual link in any version counts as manual. Records already
+    in one organization start as one group. Strong edges are applied
     strongest first (Tier 1 rule priority, weight, then pair ids); a record whose equally
     strong edges reach groups that could not join each other joins none of them. A cut
     edge becomes a candidate.
     """
-    groups = _initial_groups(members, links, rejected)
+    groups = _initial_groups(members, links, rejected, manual_organizations)
     kept, cut = [], []
     strong = [e for e in edges if e.strong and e.left in members and e.right in members]
     for _, tier in groupby(sorted(strong, key=strength_key), key=_tier):

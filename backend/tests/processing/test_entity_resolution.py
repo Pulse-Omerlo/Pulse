@@ -233,7 +233,7 @@ def test_evidence_keeps_both_fields_and_supporting_version():
 def test_empty_tenant_creates_nothing_and_does_not_commit(session):
     # Arrange
     session.scalar.return_value = Tenant(id=TENANT)
-    session.scalars.side_effect = [[], [], []]
+    session.scalars.side_effect = [[], [], [], []]
     # Act
     result = er.match_organizations(session, TENANT)
     # Assert

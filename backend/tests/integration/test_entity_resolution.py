@@ -528,3 +528,27 @@ def test_record_back_after_a_merge_gets_the_survivors_link(session):
     assert session.get(Organization, small.id).merged_into == large.id
     assert session.get(OrgLink, back.id).organization_id == large.id
     assert back.id in {member.id for member in current_records(session, tenant.id, large.id)}
+
+
+def test_manual_link_on_a_removed_record_still_protects_its_organization(session):
+    # Arrange
+    tenant, _, _, records = setup_records(
+        session,
+        [
+            {"domain": "exemple.ca"},
+            {"linkedin": "company/exemple"},
+            {"domain": "exemple.ca"},
+            {"domain": "exemple.ca", "linkedin": "company/exemple"},
+        ],
+    )
+    reviewed = manual_link(session, records[0])
+    rule_link(session, [records[2]], session.get(Organization, reviewed.organization_id))
+    other = rule_link(session, [records[1]])
+    records[0].valid_to = START + timedelta(days=1)
+    session.flush()
+    # Act
+    result = match_organizations(session, tenant.id)
+    # Assert
+    assert result == MatchResult(0, 1, 1, 0)
+    assert session.get(Organization, other.id).merged_into is None
+    assert session.get(Organization, reviewed.organization_id).merged_into is None

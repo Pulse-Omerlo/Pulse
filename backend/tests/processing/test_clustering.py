@@ -396,3 +396,14 @@ def test_merge_repoints_the_links_of_the_merged_organization():
     plan = plan_clusters(items, [edge(A, B, "domain")], links)
     # Assert
     assert plan.clusters[0].repointed == (A,)
+
+
+def test_organization_with_a_manual_link_on_a_closed_version_is_not_merged():
+    # Arrange: ORG_1's manual link is on a version that is no longer current.
+    items = members(Member(A, domain="exemple.ca"), Member(B, domain="exemple.ca"))
+    links = {A: LinkFacts(ORG_1), B: LinkFacts(ORG_2)}
+    # Act
+    plan = plan_clusters(items, [edge(A, B, "domain")], links, manual_organizations=[ORG_1])
+    # Assert
+    assert [e.rule for e in plan.candidates] == ["domain"]
+    assert all(not c.merged for c in plan.clusters)

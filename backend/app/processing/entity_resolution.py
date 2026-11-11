@@ -255,6 +255,16 @@ def _decisions(session, tenant_id, records) -> dict[Pair, MatchCandidate]:
     }
 
 
+def _manual_organizations(session: Session, tenant_id: UUID) -> set[UUID]:
+    """Organizations with a manual link on any version, current or not."""
+    query = (
+        select(OrgLink.organization_id)
+        .where(OrgLink.tenant_id == tenant_id, OrgLink.method == "manual")
+        .distinct()
+    )
+    return set(session.scalars(query))
+
+
 def _organizations(session, tenant_id, ids: set[UUID]) -> dict[UUID, Organization]:
     """The linked organizations, plus the ones they were merged into."""
     found = {}
@@ -387,6 +397,7 @@ def match_organizations(session: Session, tenant_id: UUID) -> MatchResult:
             matches,
             _link_facts(run),
             [pair for pair, decision in run.decisions.items() if decision.status == "rejected"],
+            _manual_organizations(session, tenant_id),
         )
         for cluster in plan.clusters:
             if cluster.changed:
