@@ -53,6 +53,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Sync runs page | #67 | #127 |
 | CSV and JSON file import | #24 | |
 | Industry classification of organizations | #149 | |
+| Tenant API for organizations, runs and duplicates | #63 | |
 | Merging organizations joined by a chain of matches | #108 | |
 
 ## Details
@@ -190,6 +191,23 @@ tenant isolation, and that a real sync classifies every current organization.
   out, and the file says why.
 - An integration test closed a version with an end date before its start,
   which the `valid_range` check rejects. It now sets the start date explicitly.
+
+### Tenant API for organizations, runs and duplicates (#63)
+
+Claude Code wrote the pagination helper, the organization list, detail and
+timeline queries, the duplicate candidate and group endpoints, the paging and
+change type filter on the sync runs endpoints, and the frontend client change
+that reads the paged lists.
+
+**Verification:** integration tests after a sync of synthetic data and Tier 1
+matching check each endpoint: counts against the database, sorting, pages that
+do not overlap, search, link evidence, the timeline order, and the cross-tenant
+cases. A test counts the SQL statements of each list and checks that a page of
+100 runs no more queries than a page of 1.
+
+**Problem found:** the first query-count test compared the first call with the
+second, but the first call also loads the tenant into the session, so the two
+differed for a reason unrelated to the page size. It now makes one call first.
 
 ### Merging organizations joined by a chain of matches (#108)
 

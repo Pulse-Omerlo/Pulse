@@ -148,6 +148,17 @@
   text-transform: capitalize;
 }
 
+.sync-runs-page button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.flow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .filter.active {
   border-color: var(--accent);
   background: var(--accent-bg);
@@ -229,4 +240,8 @@
 
 .empty {
   color: var(--text);
+}
+
+.placeholder {
+  border-style: dashed;
 }
