@@ -8,7 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, json_column, one_of, same_tenant_fk, tenant_id_column, uuid_pk
 
-LINK_METHODS = ("domain", "linkedin", "external_id", "name_city", "manual")
+LINK_METHODS = ("domain", "linkedin", "external_id", "name_city", "fuzzy", "manual")
 AUTOMATIC_LINK_METHODS = frozenset(method for method in LINK_METHODS if method != "manual")
 CANDIDATE_STATUSES = ("pending", "accepted", "rejected")
 
@@ -23,6 +23,8 @@ class RuleEvidence(TypedDict):
     value: str
     matched_value: str
     matched_record_id: str
+    # The link rests on a fuzzy match, directly or through another tentative link.
+    tentative: NotRequired[bool]
 
 
 class ManualEvidence(TypedDict):

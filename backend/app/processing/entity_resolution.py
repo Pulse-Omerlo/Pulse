@@ -11,11 +11,12 @@ from uuid import UUID, uuid4
 from sqlalchemy import case, select, update
 from sqlalchemy.orm import Session, aliased
 
+from app.core.logging import get_logger
 from app.core.tenancy import bound_to_tenant
 from app.models import MatchCandidate, Organization, OrgLink, SourceRecord, Tenant
 from app.models.resolution import RuleEvidence
 
-# Rule names and the LinkedIn prefix stay importable from here for existing callers.
+# The LinkedIn prefix stays importable from here for existing callers.
 from app.processing.clustering import LINKEDIN_COMPANY_PREFIX as LINKEDIN_COMPANY_PREFIX
 from app.processing.clustering import (
     Cluster,
@@ -27,15 +28,24 @@ from app.processing.clustering import (
     organization_domain,
     plan_clusters,
 )
-from app.processing.match_rules import RULE_PRIORITIES as RULE_PRIORITIES
+from app.processing.fuzzy_matching import FuzzyResult, fuzzy_matches
 from app.processing.match_rules import (
-    RULE_VERSION,
+    FUZZY_RULES,
     MatchCandidateData,
     Pair,
-    rule_weight,
+    candidate_score,
+    decided_by,
+    link_confidence,
+    rule_set_version,
     strength_key,
 )
+
+# Rule names stay importable from here for existing callers.
+from app.processing.match_rules import RULE_PRIORITIES as RULE_PRIORITIES
+from app.processing.match_rules import RULE_VERSION as RULE_VERSION
 from app.processing.match_rules import RULE_WEIGHTS as RULE_WEIGHTS
+
+logger = get_logger(__name__)
 
 # Get the domains from the config file
 GENERIC_DOMAINS_PATH = Path(__file__).with_name("generic_domains.toml")
@@ -183,18 +193,48 @@ def blocked_matches(
 
 # Function to generate evidence for a match candidate, used to provide context for the matching
 # decision
-def evidence(match: MatchCandidateData, matched_record_id: UUID) -> list[RuleEvidence]:
+def evidence(
+    match: MatchCandidateData, matched_record_id: UUID, tentative: bool = False
+) -> list[RuleEvidence]:
+    # Sides are written from this record's point of view: its value first.
+    this_is_left = matched_record_id == match.right
+    values = [(field, value, value) for field, value in match.fields] + [
+        (field, left, right) if this_is_left else (field, right, left)
+        for field, left, right in match.sides
+    ]
+    marker: dict[str, bool] = {"tentative": True} if tentative else {}
     return [
         {
             "rule": match.rule,
-            "rule_set_version": RULE_VERSION,
+            "rule_set_version": rule_set_version(match.rule),
             "field": field,
             "value": value,
-            "matched_value": value,
+            "matched_value": matched_value,
             "matched_record_id": str(matched_record_id),
+            **marker,
         }
-        for field, value in match.fields
+        for field, value, matched_value in values
     ]
+
+
+def is_tentative(link: OrgLink) -> bool:
+    """Whether a stored link rests on a fuzzy match; versioning copies the evidence."""
+    if link.method in FUZZY_RULES:
+        return True
+    return any(isinstance(entry, dict) and entry.get("tentative") for entry in link.evidence or [])
+
+
+def log_tier2(tenant_id: UUID, result: FuzzyResult) -> None:
+    """How much Tier 2 compared, and what its bounds left out, for big tenants."""
+    logger.info(
+        "tier2_matching",
+        tenant_id=str(tenant_id),
+        matches=len(result.matches),
+        comparisons=result.comparisons,
+        split_blocks=result.blocking.split_blocks,
+        windowed_blocks=result.blocking.windowed_blocks,
+        pairs_left_out=result.blocking.pairs_left_out,
+    )
 
 
 # State of one matching run: the rows it loaded and what it wrote so far.
@@ -295,6 +335,7 @@ def _link_facts(run: _Run) -> dict[UUID, LinkFacts]:
             target or link.organization_id,
             manual=link.method == "manual",
             stored_organization_id=link.organization_id if target else None,
+            tentative=is_tentative(link),
         )
     return facts
 
@@ -307,7 +348,7 @@ def _add_candidate(run: _Run, match: MatchCandidateData) -> None:
         tenant_id=run.tenant_id,
         left_record_id=left,
         right_record_id=right,
-        score=rule_weight(match.rule),
+        score=candidate_score(match),
         matched_fields=evidence(match, match.right),
         status="pending",
     )
@@ -355,16 +396,16 @@ def _repoint_earlier_merges(run: _Run) -> None:
     )
 
 
-def _add_link(run: _Run, new_link: NewLink, organization_id: UUID) -> None:
+def _add_link(run: _Run, new_link: NewLink, organization_id: UUID, tentative: bool) -> None:
     match = new_link.edge
     link = OrgLink(
         tenant_id=run.tenant_id,
         source_record_id=new_link.record_id,
         organization_id=organization_id,
         method=match.rule,
-        confidence=rule_weight(match.rule),
-        decided_by=f"tier1:{RULE_VERSION}",
-        evidence=evidence(match, new_link.neighbor),
+        confidence=link_confidence(match),
+        decided_by=decided_by(match),
+        evidence=evidence(match, new_link.neighbor, tentative),
     )
     run.session.add(link)
     run.links[new_link.record_id] = link
@@ -382,7 +423,7 @@ def _apply(run: _Run, cluster: Cluster) -> None:
     for record_id in cluster.repointed:
         run.links[record_id].organization_id = organization.id
     for new_link in cluster.new_links:
-        _add_link(run, new_link, organization.id)
+        _add_link(run, new_link, organization.id, new_link.record_id in cluster.tentative)
     # A value is only written when it changes, and never replaced by nothing.
     if cluster.display_name and cluster.display_name != organization.display_name:
         organization.display_name = cluster.display_name
@@ -390,13 +431,13 @@ def _apply(run: _Run, cluster: Cluster) -> None:
         organization.primary_domain = cluster.primary_domain
 
 
-# Loads a tenant's current organization records and past decisions, plans the clusters, then
-# creates or merges organizations, links and review candidates in the caller's transaction.
 def has_changed_record(record_ids: Iterable[UUID], changed_ids: set[UUID] | None) -> bool:
     """Whether one of the records changed; with no changed_ids every record counts."""
     return changed_ids is None or not changed_ids.isdisjoint(record_ids)
 
 
+# Loads a tenant's current organization records and past decisions, plans the clusters, then
+# creates or merges organizations, links and review candidates in the caller's transaction.
 # With changed_ids, only clusters and pairs holding one of those records are applied; the other
 # current records are still loaded so the changed ones can be compared to them.
 def match_organizations(
@@ -423,6 +464,10 @@ def match_organizations(
 
         generic_domains = load_generic_domains()
         matches = blocked_matches(records.values(), generic_domains)
+        tier1_pairs = {match.providePair for match in matches}
+        tier2 = fuzzy_matches(records.values(), generic_domains, tier1_pairs)
+        log_tier2(tenant_id, tier2)
+        matches += tier2.matches
         plan = plan_clusters(
             {key: member_from_record(record, generic_domains) for key, record in records.items()},
             matches,
