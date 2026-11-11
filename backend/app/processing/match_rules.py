@@ -4,6 +4,13 @@
 from dataclasses import dataclass
 from uuid import UUID
 
+from app.processing.fuzzy_matching import (
+    FUZZY_NAME_RULE,
+    FUZZY_RULE,
+    FUZZY_RULE_VERSION,
+    FUZZY_RULES,
+)
+
 # Version of the rules, stored with each decision.
 RULE_VERSION = "tier1-v1"
 
@@ -17,10 +24,13 @@ RULE_WEIGHTS = {
     "external_id": 1.0,
     "name_city": 0.95,
     "name_only": 0.5,
+    # Scaled by the name similarity, so a fuzzy link stays below every Tier 1 rule.
+    FUZZY_RULE: 0.9,
+    FUZZY_NAME_RULE: 0.5,
 }
 
 # Rules that only ever propose a pair for review.
-WEAK_RULES = frozenset({"name_only"})
+WEAK_RULES = frozenset({"name_only", FUZZY_NAME_RULE})
 
 # Rules of the deterministic first tier.
 TIER1_RULES = frozenset(RULE_PRIORITIES)
@@ -32,6 +42,8 @@ MERGE_RULES = frozenset({"domain", "linkedin", "external_id"})
 Pair = tuple[UUID, UUID]
 # (field, value) for each field a rule matched on.
 Fields = tuple[tuple[str, str], ...]
+# Field name, value on the left record, value on the right record
+Sides = tuple[tuple[str, str, str], ...]
 
 
 # Two record versions and the rule that matched them.
@@ -41,6 +53,10 @@ class MatchCandidateData:
     right: UUID
     rule: str
     fields: Fields
+    # Name similarity behind a fuzzy rule; Tier 1 rules use their weight instead.
+    score: float | None = None
+    # Fields whose values differ between the two records, such as fuzzy names.
+    sides: Sides = ()
 
     @property
     def providePair(self) -> Pair:
@@ -58,10 +74,29 @@ def rule_weight(rule: str) -> float:
     return RULE_WEIGHTS.get(rule, 0.0)
 
 
+def link_confidence(edge: MatchCandidateData) -> float:
+    """The rule weight, scaled by the similarity when the rule has one."""
+    similarity = 1.0 if edge.score is None else edge.score
+    return round(rule_weight(edge.rule) * similarity, 3)
+
+
+def candidate_score(edge: MatchCandidateData) -> float:
+    return rule_weight(edge.rule) if edge.score is None else edge.score
+
+
+def rule_set_version(rule: str) -> str:
+    return FUZZY_RULE_VERSION if rule in FUZZY_RULES else RULE_VERSION
+
+
+def decided_by(edge: MatchCandidateData) -> str:
+    tier = "tier2" if edge.rule in FUZZY_RULES else "tier1"
+    return f"{tier}:{rule_set_version(edge.rule)}"
+
+
 def strength_key(edge: MatchCandidateData) -> tuple[int, float, UUID, UUID]:
-    """Sort key putting the strongest edge first: Tier 1 priority, then weight, then pair."""
+    """Sort key putting the strongest edge first: Tier 1 priority, then confidence, then pair."""
     rank = RULE_PRIORITIES.index(edge.rule) if edge.rule in TIER1_RULES else len(RULE_PRIORITIES)
-    return (rank, -rule_weight(edge.rule), *edge.providePair)
+    return (rank, -link_confidence(edge), *edge.providePair)
 
 
 def can_merge_organizations(edge: MatchCandidateData) -> bool:
