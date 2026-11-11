@@ -7,7 +7,7 @@ import logging
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from itertools import batched
+from itertools import batched, chain
 from uuid import UUID
 
 from sqlalchemy import select
@@ -127,21 +127,29 @@ def recheck_links(
         return result
 
 
+def _organization_versions(session: Session, ids: Sequence[UUID]) -> dict[UUID, SourceRecord]:
+    """Load organization versions for one id batch."""
+    if not ids:
+        return {}
+    return {
+        record.id: record
+        for record in session.scalars(
+            select(SourceRecord).where(
+                SourceRecord.id.in_(ids),
+                SourceRecord.kind == "organization",
+            )
+        )
+    }
+
+
 def _load_versions(
     session: Session, carried: Sequence[tuple[UUID, UUID]]
 ) -> dict[UUID, SourceRecord]:
-    ids = {record_id for pair in carried for record_id in pair}
+    # One query per batch; the outer loop is only the batch size guard.
+    ids = set(chain.from_iterable(carried))
     found: dict[UUID, SourceRecord] = {}
     for batch in batched(ids, BATCH_SIZE):
-        found.update(
-            (record.id, record)
-            for record in session.scalars(
-                select(SourceRecord).where(
-                    SourceRecord.id.in_(batch),
-                    SourceRecord.kind == "organization",
-                )
-            )
-        )
+        found.update(_organization_versions(session, batch))
     return found
 
 
