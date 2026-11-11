@@ -53,6 +53,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Sync runs page | #67 | #127 |
 | CSV and JSON file import | #24 | |
 | Industry classification of organizations | #149 | |
+| Merging organizations joined by a chain of matches | #108 | |
 
 ## Details
 
@@ -189,3 +190,24 @@ tenant isolation, and that a real sync classifies every current organization.
   out, and the file says why.
 - An integration test closed a version with an end date before its start,
   which the `valid_range` check rejects. It now sets the start date explicitly.
+
+### Merging organizations joined by a chain of matches (#108)
+
+Claude Code wrote the union-find clustering, the conflict check that cuts the
+weakest link of a chain, the survivor and display value rules, and the change
+to `match_organizations` that merges organizations and sets `merged_into`. It
+also wrote the `merged_into` migration, the helper that resolves a merged id,
+and the tests. Treating a rejected pair like a conflict, so the rest of the
+chain still links, was its proposal; the PR lists it under decisions to review.
+
+**Verification:** unit tests in `tests/processing/test_clustering.py` run the
+planner on plain data (a three-record chain, two organizations merged, a
+conflicting chain, a parent and subsidiary sharing a LinkedIn URL, a manual
+organization, a rule outside Tier 1). The integration tests merge real
+organizations on Postgres, roll the merge back, rerun it with no changes and
+check tenant isolation. The Tier 1 report gives the same precision and recall
+as before.
+
+**Problem found:** `blocked_matches` sorted matches with
+`RULE_PRIORITIES.index`, which would have raised on any new rule such as the
+planned `fuzzy` one. It now uses the same sort key as the clustering.
