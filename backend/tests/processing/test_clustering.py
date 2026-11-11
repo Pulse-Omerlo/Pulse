@@ -9,8 +9,6 @@ import pytest
 from app.models import SourceRecord
 from app.processing import clustering
 from app.processing.clustering import (
-    DisjointSet,
-    Identifiers,
     LinkFacts,
     Member,
     choose_survivor,
@@ -58,16 +56,6 @@ def test_join_that_adds_a_new_disagreement_is_still_cut():
     assert [e.rule for e in plan.candidates] == ["linkedin"]
 
 
-def test_external_ids_disagree_per_namespace():
-    # Arrange: crm ids are shared, neq ids are not.
-    first = Member(A, external_ids=frozenset({("crm", "1"), ("neq", "10")}))
-    second = Member(B, external_ids=frozenset({("crm", "1"), ("neq", "20")}))
-    third = Member(C, external_ids=frozenset({("crm", "1"), ("other", "20")}))
-    # Act / Assert
-    assert Identifiers.of(first).disagrees(Identifiers.of(second))
-    assert not Identifiers.of(first).disagrees(Identifiers.of(third))
-
-
 def test_large_shared_domain_block_is_planned_without_mixing_linkedin_pages():
     # Arrange: 600 records on one domain, half on each of two LinkedIn pages.
     ids = [UUID(int=1000 + n) for n in range(600)]
@@ -82,18 +70,6 @@ def test_large_shared_domain_block_is_planned_without_mixing_linkedin_pages():
         assert len({items[r].linkedin for r in cluster.members}) == 1
     kept = len(edges) - len(plan.candidates)
     assert kept >= sum(len(c.members) - 1 for c in plan.clusters)
-
-
-def test_union_find_keeps_the_smallest_id_as_root():
-    # Arrange
-    sets = DisjointSet([A, B, C, D])
-    # Act
-    sets.union(D, C)
-    sets.union(C, B)
-    # Assert
-    assert sets.find(D) == B
-    assert sets.members(C) == frozenset({B, C, D})
-    assert sets.groups() == [frozenset({A}), frozenset({B, C, D})]
 
 
 def test_three_record_chain_becomes_one_new_cluster():
@@ -185,14 +161,15 @@ def test_weakest_link_is_cut_even_when_listed_first():
     assert [cluster.members for cluster in plan.clusters] == [{B, C}]
 
 
-def test_equal_rules_are_applied_in_pair_order():
-    # Arrange
-    items = members(Member(A, domain="a.ca"), Member(B), Member(C, domain="c.ca"))
-    edges = [edge(B, C, "linkedin"), edge(A, B, "linkedin")]
+def test_chain_whose_ends_conflict_cuts_the_edge_with_the_larger_pair():
+    # Arrange: no record touches both ends, so this is not a tie.
+    items = members(Member(A, domain="a.ca"), Member(B), Member(C), Member(D, domain="d.ca"))
+    edges = [edge(C, D, "linkedin"), edge(A, B, "linkedin"), edge(B, C, "linkedin")]
     # Act
     plan = plan_clusters(items, edges, {})
     # Assert
-    assert [(e.left, e.right) for e in plan.candidates] == [(B, C)]
+    assert [(e.left, e.right) for e in plan.candidates] == [(C, D)]
+    assert [cluster.members for cluster in plan.clusters] == [{A, B, C}]
 
 
 def test_manual_organization_is_never_merged():
@@ -274,32 +251,6 @@ def test_edges_to_unknown_records_are_ignored():
     assert plan == clustering.ClusterPlan((), ())
 
 
-@pytest.mark.parametrize(
-    ("first", "second", "conflict"),
-    [
-        (Member(A, domain="parent.ca"), Member(B, domain="subsidiary.ca"), True),
-        (Member(A, linkedin="company/parent"), Member(B, linkedin="company/subsidiary"), True),
-        (
-            Member(A, external_ids=frozenset({("neq", "123")})),
-            Member(B, external_ids=frozenset({("neq", "456")})),
-            True,
-        ),
-        (
-            Member(A, external_ids=frozenset({("crm", "old"), ("crm", "123")})),
-            Member(B, external_ids=frozenset({("crm", "123")})),
-            False,
-        ),
-        (Member(A, external_ids=frozenset({("crm", "123")})), Member(B), False),
-        (Member(A, domain="exemple.ca"), Member(B), False),
-    ],
-)
-def test_identifiers_disagree_only_with_no_shared_value(first, second, conflict):
-    # Act
-    result = Identifiers.of(first).disagrees(Identifiers.of(second))
-    # Assert
-    assert result is conflict
-
-
 def test_member_drops_generic_domains_and_person_profiles():
     # Arrange
     when = datetime(2026, 11, 1, tzinfo=UTC)
@@ -336,3 +287,77 @@ def test_external_ids_ignore_bad_entries_but_preserve_case():
     # Assert
     assert keys == {("crm", "ABC"), ("crm", "abc"), ("neq", "ABC")}
     assert clustering.external_keys(SourceRecord(id=B, external_ids=None)) == set()
+
+
+ORDERS = pytest.mark.parametrize("ids", [(A, B, C), (C, B, A), (B, A, C)])
+
+
+@ORDERS
+def test_parent_sharing_a_domain_with_two_conflicting_groups_joins_neither(ids):
+    # Arrange
+    parent, radio, tele = ids
+    items = members(
+        Member(parent, domain="groupe-medias.ca"),
+        Member(radio, domain="groupe-medias.ca", linkedin="company/radio-nord"),
+        Member(tele, domain="groupe-medias.ca", linkedin="company/tele-nord"),
+    )
+    edges = [
+        edge(*sorted(pair), "domain") for pair in ((parent, radio), (parent, tele), (radio, tele))
+    ]
+    # Act
+    plan = plan_clusters(items, edges, {})
+    # Assert
+    assert plan.clusters == ()
+    assert sorted(e.providePair for e in plan.candidates) == sorted(e.providePair for e in edges)
+
+
+@ORDERS
+def test_tie_between_two_existing_organizations_links_the_record_to_neither(ids):
+    # Arrange
+    record, radio, tele = ids
+    items = members(
+        Member(record, domain="groupe-medias.ca"),
+        Member(radio, domain="groupe-medias.ca", linkedin="company/radio-nord"),
+        Member(tele, domain="groupe-medias.ca", linkedin="company/tele-nord"),
+    )
+    links = {radio: LinkFacts(ORG_1), tele: LinkFacts(ORG_2)}
+    edges = [edge(*sorted(pair), "domain") for pair in ((record, radio), (record, tele))]
+    # Act
+    plan = plan_clusters(items, edges, links)
+    # Assert
+    assert all(not cluster.new_links for cluster in plan.clusters)
+    assert len(plan.candidates) == 2
+
+
+@ORDERS
+def test_record_holding_two_aliases_of_disagreeing_records_joins_neither(ids):
+    # Arrange
+    bridge, first, second = ids
+    items = members(
+        Member(bridge, external_ids=frozenset({("neq", "1"), ("neq", "2")})),
+        Member(first, external_ids=frozenset({("neq", "1")})),
+        Member(second, external_ids=frozenset({("neq", "2")})),
+    )
+    edges = [edge(*sorted(pair), "external_id") for pair in ((bridge, first), (bridge, second))]
+    # Act
+    plan = plan_clusters(items, edges, {})
+    # Assert
+    assert plan.clusters == ()
+    assert len(plan.candidates) == 2
+
+
+@ORDERS
+def test_record_that_can_only_join_one_side_is_not_a_tie(ids):
+    # Arrange
+    record, same, other = ids
+    items = members(
+        Member(record, domain="groupe-medias.ca", linkedin="company/radio-nord"),
+        Member(same, domain="groupe-medias.ca", linkedin="company/radio-nord"),
+        Member(other, domain="groupe-medias.ca", linkedin="company/tele-nord"),
+    )
+    edges = [edge(*sorted(pair), "domain") for pair in ((record, same), (record, other))]
+    # Act
+    plan = plan_clusters(items, edges, {})
+    # Assert
+    assert [cluster.members for cluster in plan.clusters] == [{record, same}]
+    assert [set(e.providePair) for e in plan.candidates] == [{record, other}]

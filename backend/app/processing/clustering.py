@@ -3,17 +3,14 @@
 
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
+from itertools import groupby
 from uuid import UUID
 
 from app.models import SourceRecord
-from app.processing.match_rules import (
-    MatchCandidateData,
-    Pair,
-    can_merge_organizations,
-    strength_key,
-)
+from app.processing.cluster_groups import Group, Groups, Identifiers
+from app.processing.match_rules import MatchCandidateData, Pair, strength_key
 from app.processing.organization_values import choose_display_values
 
 
@@ -108,143 +105,6 @@ def member_from_record(record: SourceRecord, generic_domains: frozenset[str]) ->
     )
 
 
-def _disagree(first: frozenset[str], second: frozenset[str]) -> bool:
-    return bool(first) and bool(second) and first.isdisjoint(second)
-
-
-@dataclass(frozen=True)
-class Identifiers:
-    """Every domain, company LinkedIn URL and external id seen in a group of records."""
-
-    domains: frozenset[str] = frozenset()
-    linkedins: frozenset[str] = frozenset()
-    # Values by namespace; never mutated after construction.
-    external: Mapping[str, frozenset[str]] = field(default_factory=dict)
-
-    @classmethod
-    def of(cls, member: Member) -> "Identifiers":
-        external = defaultdict(set)
-        for namespace, value in member.external_ids:
-            external[namespace].add(value)
-        return cls(
-            domains=frozenset({member.domain} - {None}),
-            linkedins=frozenset({member.linkedin} - {None}),
-            external={namespace: frozenset(values) for namespace, values in external.items()},
-        )
-
-    def merge(self, other: "Identifiers") -> "Identifiers":
-        external = dict(self.external)
-        for namespace, values in other.external.items():
-            external[namespace] = external.get(namespace, frozenset()) | values
-        return Identifiers(self.domains | other.domains, self.linkedins | other.linkedins, external)
-
-    def disagrees(self, other: "Identifiers") -> bool:
-        """True when both have values of one kind and share none of them."""
-        if _disagree(self.domains, other.domains) or _disagree(self.linkedins, other.linkedins):
-            return True
-        return any(
-            _disagree(values, other.external.get(namespace, frozenset()))
-            for namespace, values in self.external.items()
-        )
-
-
-class DisjointSet:
-    """Union-find whose root is always the smallest id, so the result is deterministic."""
-
-    def __init__(self, items: Iterable[UUID]) -> None:
-        self._parent = {item: item for item in items}
-        self._members = {item: {item} for item in self._parent}
-
-    def find(self, item: UUID) -> UUID:
-        root = item
-        while self._parent[root] != root:
-            root = self._parent[root]
-        while self._parent[item] != root:
-            self._parent[item], item = root, self._parent[item]
-        return root
-
-    def union(self, first: UUID, second: UUID) -> UUID:
-        first, second = sorted((self.find(first), self.find(second)))
-        if first != second:
-            self._parent[second] = first
-            self._members[first] |= self._members.pop(second)
-        return first
-
-    def members(self, item: UUID) -> frozenset[UUID]:
-        return frozenset(self._members[self.find(item)])
-
-    def groups(self) -> list[frozenset[UUID]]:
-        return [frozenset(group) for _, group in sorted(self._members.items())]
-
-
-@dataclass(frozen=True)
-class _Group:
-    """What the planner needs to know about one union-find group."""
-
-    identifiers: Identifiers
-    organizations: frozenset[UUID]
-    manual: bool
-    # Records that a reviewer rejected as a match for some member.
-    rejected: frozenset[UUID]
-
-    def merge(self, other: "_Group") -> "_Group":
-        return _Group(
-            self.identifiers.merge(other.identifiers),
-            self.organizations | other.organizations,
-            self.manual or other.manual,
-            self.rejected | other.rejected,
-        )
-
-
-class _Planner:
-    """Union-find over the records, with a summary of each group kept at its root."""
-
-    def __init__(
-        self,
-        members: Mapping[UUID, Member],
-        links: Mapping[UUID, LinkFacts],
-        rejected: Iterable[Pair],
-    ) -> None:
-        rejected_by = defaultdict(set)
-        for left, right in rejected:
-            rejected_by[left].add(right)
-            rejected_by[right].add(left)
-        self.links = links
-        self.manual = frozenset(f.organization_id for f in links.values() if f.manual)
-        self.sets = DisjointSet(sorted(members))
-        self.groups = {}
-        for record_id, member in members.items():
-            facts = links.get(record_id)
-            organizations = frozenset({facts.organization_id}) if facts else frozenset()
-            self.groups[record_id] = _Group(
-                Identifiers.of(member),
-                organizations,
-                bool(organizations & self.manual),
-                frozenset(rejected_by.get(record_id, ())),
-            )
-
-    def root(self, record_id: UUID) -> UUID:
-        return self.sets.find(record_id)
-
-    def join(self, first: UUID, second: UUID) -> None:
-        first, second = self.root(first), self.root(second)
-        if first == second:
-            return
-        merged = self.groups.pop(first).merge(self.groups.pop(second))
-        self.groups[self.sets.union(first, second)] = merged
-
-    def blocked(self, edge: MatchCandidateData, first: UUID, second: UUID) -> bool:
-        """Whether joining the groups rooted at first and second through edge breaks a rule."""
-        a, b = self.groups[first], self.groups[second]
-        smaller, other_root = (a, second) if len(a.rejected) <= len(b.rejected) else (b, first)
-        if any(self.root(record_id) == other_root for record_id in smaller.rejected):
-            return True
-        merges = bool(a.organizations and b.organizations)
-        if merges and (not can_merge_organizations(edge) or a.manual or b.manual):
-            return True
-        return a.identifiers.disagrees(b.identifiers)
-
-
 def choose_survivor(counts: Mapping[UUID, int]) -> UUID:
     """The organization with the most current links; ties go to the smallest id."""
     return min(counts, key=lambda organization_id: (-counts[organization_id], organization_id))
@@ -279,12 +139,11 @@ def _new_links(
 
 
 def _cluster(
-    planner: _Planner,
     members: Mapping[UUID, Member],
+    links: Mapping[UUID, LinkFacts],
     group: frozenset[UUID],
     edges: Sequence[MatchCandidateData],
 ) -> Cluster:
-    links = planner.links
     counts = Counter(links[r].organization_id for r in group if r in links)
     survivor = choose_survivor(counts) if counts else None
     name, domain = choose_display_values(members[r] for r in sorted(group))
@@ -307,6 +166,38 @@ def _by_organization(
     return by_organization
 
 
+def _initial_groups(
+    members: Mapping[UUID, Member],
+    links: Mapping[UUID, LinkFacts],
+    rejected: Iterable[Pair],
+) -> Groups:
+    """One group per record, then records already in one organization joined together."""
+    rejected_by = defaultdict(set)
+    for left, right in rejected:
+        rejected_by[left].add(right)
+        rejected_by[right].add(left)
+    manual = {facts.organization_id for facts in links.values() if facts.manual}
+    summaries = {}
+    for record_id, member in members.items():
+        facts = links.get(record_id)
+        organizations = frozenset({facts.organization_id}) if facts else frozenset()
+        summaries[record_id] = Group(
+            Identifiers.of(member),
+            organizations,
+            bool(organizations & manual),
+            frozenset(rejected_by.get(record_id, ())),
+        )
+    groups = Groups(summaries)
+    for record_ids in _by_organization(links, members).values():
+        for record_id in record_ids[1:]:
+            groups.join(record_ids[0], record_id)
+    return groups
+
+
+def _tier(edge: MatchCandidateData) -> tuple[int, float]:
+    return strength_key(edge)[:2]
+
+
 def plan_clusters(
     members: Mapping[UUID, Member],
     edges: Sequence[MatchCandidateData],
@@ -317,31 +208,31 @@ def plan_clusters(
 
     Guarantee: no join brings together a rejected pair, organizations that may not merge,
     or two groups that both have values of one identifier and share none of them.
-    Records already in one organization start as one group; strong edges are then applied
-    strongest first (Tier 1 rule priority, weight, then pair ids), and a cut edge becomes
-    a candidate.
+    Records already in one organization start as one group. Strong edges are applied
+    strongest first (Tier 1 rule priority, weight, then pair ids); a record whose equally
+    strong edges reach groups that could not join each other joins none of them. A cut
+    edge becomes a candidate.
     """
-    planner = _Planner(members, links, rejected)
-    for record_ids in _by_organization(links, members).values():
-        for record_id in record_ids[1:]:
-            planner.join(record_ids[0], record_id)
-
+    groups = _initial_groups(members, links, rejected)
     kept, cut = [], []
     strong = [e for e in edges if e.strong and e.left in members and e.right in members]
-    for edge in sorted(strong, key=strength_key):
-        first, second = planner.root(edge.left), planner.root(edge.right)
-        if first != second and planner.blocked(edge, first, second):
-            cut.append(edge)
-            continue
-        planner.join(first, second)
-        kept.append(edge)
+    for _, tier in groupby(sorted(strong, key=strength_key), key=_tier):
+        tier = list(tier)
+        ties = groups.tie_cuts(tier)
+        for edge in tier:
+            first, second = groups.root(edge.left), groups.root(edge.right)
+            if edge in ties or (first != second and groups.blocked(edge, first, second)):
+                cut.append(edge)
+                continue
+            groups.join(first, second)
+            kept.append(edge)
 
     edges_by_root = defaultdict(list)
     for edge in kept:
-        edges_by_root[planner.root(edge.left)].append(edge)
+        edges_by_root[groups.root(edge.left)].append(edge)
     clusters = tuple(
-        _cluster(planner, members, group, edges_by_root[min(group)])
-        for group in planner.sets.groups()
+        _cluster(members, links, group, edges_by_root[min(group)])
+        for group in groups.sets.groups()
         if len(group) > 1
     )
     return ClusterPlan(clusters=clusters, candidates=tuple(cut))
