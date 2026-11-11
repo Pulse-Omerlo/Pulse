@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app import match as match_command
 from app import sync as sync_command
 from app.ingestion.connector import parse_timestamp
 from app.ingestion.omerlo.connector import OmerloConnector
@@ -552,3 +553,31 @@ def test_a_failed_matching_keeps_the_records_and_can_be_run_again(session, sync,
     assert result.links_created == row_count(session, OrgLink)
     session.refresh(run)
     assert run.counts["matching"]["links_created"] == result.links_created
+
+
+def test_match_command_reruns_a_sync_run(
+    migrated_database, mock_app, tmp_path, monkeypatch, capsys
+):
+    # Arrange
+    with Session(migrated_database) as setup:
+        seed(setup)
+        setup.commit()
+    monkeypatch.setenv("ARCHIVE_DIR", str(tmp_path / "archive"))
+    monkeypatch.setattr(
+        sync_command, "create_omerlo_client", lambda settings: mock_client(mock_app, SLUG)
+    )
+    sync_command.main(["--tenant", SLUG, "--full"])
+    with Session(migrated_database) as check:
+        run_id = check.scalar(select(SyncRun.id))
+    capsys.readouterr()
+
+    # Act
+    match_command.main(["--sync-run", str(run_id)])
+
+    # Assert
+    lines = capsys.readouterr().out.splitlines()
+    summary = json.loads(lines[-1])
+    assert summary["event"] == "organization_matching_completed"
+    # The sync already matched everything, so the re-run creates nothing.
+    assert summary["links_created"] == 0
+    assert summary["organizations_created"] == 0

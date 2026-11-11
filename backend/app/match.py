@@ -47,11 +47,13 @@ def match_run(session, run_id: uuid.UUID) -> MatchResult:
     if run.status != "succeeded":
         raise SyncCommandError(f"Sync run {run_id} did not succeed; nothing to match")
 
-    with bound_to_tenant(session, run.tenant_id):
+    # Saved before matching: the run is reloaded after the commit, which needs the tenant.
+    tenant_id = run.tenant_id
+    with bound_to_tenant(session, tenant_id):
         result = match_after_sync(session, run)
-    if result is None:
-        raise SyncCommandError(f"Matching failed: {run.counts['matching']['error']}")
-    log_summary(run.tenant_id, result)
+        if result is None:
+            raise SyncCommandError(f"Matching failed: {run.counts['matching']['error']}")
+    log_summary(tenant_id, result)
     return result
 
 
