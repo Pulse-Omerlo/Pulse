@@ -42,6 +42,8 @@ class PersonMatch:
     right: UUID
     rule: str
     fields: Fields
+    # Differing field values between the two records; Tier 1 people matches leave this empty.
+    sides: tuple[tuple[str, str, str], ...] = ()
 
     @property
     def providePair(self) -> Pair:

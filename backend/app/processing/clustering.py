@@ -1,6 +1,7 @@
 # AI contribution: 50% or more AI-generated
 """Group matched records into organizations without touching the database."""
 
+import heapq
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -9,8 +10,9 @@ from itertools import groupby
 from uuid import UUID
 
 from app.models import SourceRecord
-from app.processing.cluster_groups import Group, Groups, Identifiers
-from app.processing.match_rules import MatchCandidateData, Pair, strength_key
+from app.processing.cluster_groups import Groups, Identifiers, record_group
+from app.processing.fuzzy_profile import signals
+from app.processing.match_rules import TIER1_RULES, MatchCandidateData, Pair, strength_key
 from app.processing.organization_values import choose_display_values
 
 LINKEDIN_COMPANY_PREFIX = "company/"
@@ -30,6 +32,9 @@ class Member:
     linkedin: str | None = None
     external_ids: frozenset[tuple[str, str]] = frozenset()
     updated: datetime | None = None
+    # Cities and business email domains, which a fuzzy match must not contradict.
+    cities: frozenset[str] = frozenset()
+    email_domains: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -38,6 +43,8 @@ class LinkFacts:
 
     organization_id: UUID
     manual: bool = False
+    # The link rests on a fuzzy match, directly or through another tentative link.
+    tentative: bool = False
     # The organization the stored link names, when it is one that was merged away.
     stored_organization_id: UUID | None = None
 
@@ -67,6 +74,8 @@ class Cluster:
     primary_domain: str | None
     # Linked members whose stored link names another organization than this one.
     repointed: tuple[UUID, ...] = ()
+    # Members placed by a fuzzy match, directly or through another tentative member.
+    tentative: frozenset[UUID] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -105,6 +114,7 @@ def organization_domain(record: SourceRecord, generic_domains: frozenset[str]) -
 
 
 def member_from_record(record: SourceRecord, generic_domains: frozenset[str]) -> Member:
+    found = signals(record, generic_domains)
     return Member(
         id=record.id,
         name=(record.attributes or {}).get("name") or None,
@@ -114,6 +124,8 @@ def member_from_record(record: SourceRecord, generic_domains: frozenset[str]) ->
         linkedin=company_linkedin(record),
         external_ids=frozenset(external_keys(record)),
         updated=record.valid_from,
+        cities=found.cities,
+        email_domains=found.email_domains,
     )
 
 
@@ -127,26 +139,38 @@ def _new_links(
     edges: Sequence[MatchCandidateData],
     links: Mapping[UUID, LinkFacts],
 ) -> tuple[NewLink, ...]:
-    """Link each unlinked member through the kept edge that reaches it first.
+    """Link each unlinked member through the strongest kept edge that reaches it.
 
-    The graph search starts from the linked members, or from the smallest id for a new
-    organization, and follows edges strongest first.
+    Like Prim's algorithm: from the linked members (or, for a new organization, the
+    strongest edge), always take the strongest edge from a linked member to an unlinked
+    one, so a record reachable through a Tier 1 edge is never linked through a fuzzy one.
     """
     adjacency = defaultdict(list)
     for edge in edges:
-        adjacency[edge.left].append((edge.right, edge))
-        adjacency[edge.right].append((edge.left, edge))
-    roots = sorted(group & links.keys()) or [min(group)]
-    linked, queue, result = set(roots) & links.keys(), list(roots), []
-    for record_id in queue:
-        for neighbor, edge in adjacency[record_id]:
-            if record_id not in linked:
-                result.append(NewLink(record_id, edge, neighbor))
-                linked.add(record_id)
-            if neighbor not in linked:
-                result.append(NewLink(neighbor, edge, record_id))
-                linked.add(neighbor)
-                queue.append(neighbor)
+        adjacency[edge.left].append((strength_key(edge), edge.right, edge))
+        adjacency[edge.right].append((strength_key(edge), edge.left, edge))
+    linked = set(group & links.keys())
+    result: list[NewLink] = []
+    if not linked:
+        # A new organization always has at least one kept edge.
+        first = min(edges, key=strength_key)
+        result += [
+            NewLink(first.left, first, first.right),
+            NewLink(first.right, first, first.left),
+        ]
+        linked = {first.left, first.right}
+    frontier = [item for record_id in linked for item in adjacency[record_id]]
+    heapq.heapify(frontier)
+    while frontier:
+        _, record_id, edge = heapq.heappop(frontier)
+        if record_id in linked:
+            continue
+        neighbor = edge.right if edge.left == record_id else edge.left
+        result.append(NewLink(record_id, edge, neighbor))
+        linked.add(record_id)
+        for item in adjacency[record_id]:
+            if item[1] not in linked:
+                heapq.heappush(frontier, item)
     return tuple(result)
 
 
@@ -156,6 +180,7 @@ def _cluster(
     manual: frozenset[UUID],
     group: frozenset[UUID],
     edges: Sequence[MatchCandidateData],
+    tentative: frozenset[UUID] = frozenset(),
 ) -> Cluster:
     counts = Counter(links[r].organization_id for r in group if r in links)
     survivor = choose_survivor(counts) if counts else None
@@ -170,6 +195,7 @@ def _cluster(
         display_name=name,
         primary_domain=domain,
         repointed=tuple(sorted(r for r in group if r in links and links[r].stored != survivor)),
+        tentative=tentative,
     )
 
 
@@ -196,16 +222,20 @@ def _initial_groups(
     manual = {facts.organization_id for facts in links.values() if facts.manual}
     manual.update(manual_organizations)
     summaries = {}
+    places = {r: (member.cities, member.email_domains) for r, member in members.items()}
     for record_id, member in members.items():
         facts = links.get(record_id)
         organizations = frozenset({facts.organization_id}) if facts else frozenset()
-        summaries[record_id] = Group(
+        summaries[record_id] = record_group(
+            record_id,
             Identifiers.of(member),
+            places[record_id],
+            bool(facts and facts.tentative),
             organizations,
             bool(organizations & manual),
             frozenset(rejected_by.get(record_id, ())),
         )
-    groups = Groups(summaries, frozenset(manual))
+    groups = Groups(summaries, frozenset(manual), places)
     for record_ids in _by_organization(links, members).values():
         for record_id in record_ids[1:]:
             groups.join(record_ids[0], record_id)
@@ -241,17 +271,27 @@ def plan_clusters(
         ties = groups.tie_cuts(tier)
         for edge in tier:
             first, second = groups.root(edge.left), groups.root(edge.right)
+            # A weaker path between records already together would only be a worse link.
+            if first == second and edge.rule not in TIER1_RULES:
+                continue
             if edge in ties or (first != second and groups.blocked(edge, first, second)):
                 cut.append(edge)
                 continue
-            groups.join(first, second)
+            groups.join(first, second, edge)
             kept.append(edge)
 
     edges_by_root = defaultdict(list)
     for edge in kept:
         edges_by_root[groups.root(edge.left)].append(edge)
     clusters = tuple(
-        _cluster(members, links, groups.manual, group, edges_by_root[min(group)])
+        _cluster(
+            members,
+            links,
+            groups.manual,
+            group,
+            edges_by_root[min(group)],
+            groups.tentative_members(min(group)),
+        )
         for group in groups.sets.groups()
         if len(group) > 1 or group & links.keys()
     )
