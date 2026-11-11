@@ -71,3 +71,18 @@ def test_copy_record_changes_only_what_it_is_given():
         None,
     )
     assert original.domain == "tremblay.ca"
+
+
+def test_tier2_never_joins_two_tier1_groups():
+    # Arrange
+    records = [
+        record(1, "imprimerie belanger", domain="a.ca"),
+        record(2, "imprimerie belanger x", domain="a.ca"),
+        record(3, "imprimerie belager", linkedin="company/b"),
+        record(4, "imprimerie belager z", linkedin="company/b"),
+    ]
+    # Act
+    _, both = accuracy.tier_groupings(records, CONFIG)
+    # Assert
+    assert sorted(map(sorted, both.groups)) == [["org-1", "org-2"], ["org-3", "org-4"]]
+    assert both.tier2_linked == 0 and both.tier2_review > 0

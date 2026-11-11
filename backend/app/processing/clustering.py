@@ -10,7 +10,8 @@ from itertools import groupby
 from uuid import UUID
 
 from app.models import SourceRecord
-from app.processing.cluster_groups import Group, Groups, Identifiers
+from app.processing.cluster_groups import Groups, Identifiers, record_group
+from app.processing.fuzzy_profile import signals
 from app.processing.match_rules import TIER1_RULES, MatchCandidateData, Pair, strength_key
 from app.processing.organization_values import choose_display_values
 
@@ -29,6 +30,9 @@ class Member:
     linkedin: str | None = None
     external_ids: frozenset[tuple[str, str]] = frozenset()
     updated: datetime | None = None
+    # Cities and business email domains, which a fuzzy match must not contradict.
+    cities: frozenset[str] = frozenset()
+    email_domains: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,8 @@ class LinkFacts:
 
     organization_id: UUID
     manual: bool = False
+    # The link rests on a fuzzy match, directly or through another tentative link.
+    tentative: bool = False
     # The organization the stored link names, when it is one that was merged away.
     stored_organization_id: UUID | None = None
 
@@ -66,6 +72,8 @@ class Cluster:
     primary_domain: str | None
     # Linked members whose stored link names another organization than this one.
     repointed: tuple[UUID, ...] = ()
+    # Members placed by a fuzzy match, directly or through another tentative member.
+    tentative: frozenset[UUID] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -104,6 +112,7 @@ def organization_domain(record: SourceRecord, generic_domains: frozenset[str]) -
 
 
 def member_from_record(record: SourceRecord, generic_domains: frozenset[str]) -> Member:
+    found = signals(record, generic_domains)
     return Member(
         id=record.id,
         name=(record.attributes or {}).get("name") or None,
@@ -113,6 +122,8 @@ def member_from_record(record: SourceRecord, generic_domains: frozenset[str]) ->
         linkedin=company_linkedin(record),
         external_ids=frozenset(external_keys(record)),
         updated=record.valid_from,
+        cities=found.cities,
+        email_domains=found.email_domains,
     )
 
 
@@ -168,6 +179,7 @@ def _cluster(
     manual: frozenset[UUID],
     group: frozenset[UUID],
     edges: Sequence[MatchCandidateData],
+    tentative: frozenset[UUID] = frozenset(),
 ) -> Cluster:
     counts = Counter(links[r].organization_id for r in group if r in links)
     survivor = choose_survivor(counts) if counts else None
@@ -182,6 +194,7 @@ def _cluster(
         display_name=name,
         primary_domain=domain,
         repointed=tuple(sorted(r for r in group if r in links and links[r].stored != survivor)),
+        tentative=tentative,
     )
 
 
@@ -208,16 +221,20 @@ def _initial_groups(
     manual = {facts.organization_id for facts in links.values() if facts.manual}
     manual.update(manual_organizations)
     summaries = {}
+    places = {r: (member.cities, member.email_domains) for r, member in members.items()}
     for record_id, member in members.items():
         facts = links.get(record_id)
         organizations = frozenset({facts.organization_id}) if facts else frozenset()
-        summaries[record_id] = Group(
+        summaries[record_id] = record_group(
+            record_id,
             Identifiers.of(member),
+            places[record_id],
+            bool(facts and facts.tentative),
             organizations,
             bool(organizations & manual),
             frozenset(rejected_by.get(record_id, ())),
         )
-    groups = Groups(summaries, frozenset(manual))
+    groups = Groups(summaries, frozenset(manual), places)
     for record_ids in _by_organization(links, members).values():
         for record_id in record_ids[1:]:
             groups.join(record_ids[0], record_id)
@@ -259,14 +276,21 @@ def plan_clusters(
             if edge in ties or (first != second and groups.blocked(edge, first, second)):
                 cut.append(edge)
                 continue
-            groups.join(first, second)
+            groups.join(first, second, edge)
             kept.append(edge)
 
     edges_by_root = defaultdict(list)
     for edge in kept:
         edges_by_root[groups.root(edge.left)].append(edge)
     clusters = tuple(
-        _cluster(members, links, groups.manual, group, edges_by_root[min(group)])
+        _cluster(
+            members,
+            links,
+            groups.manual,
+            group,
+            edges_by_root[min(group)],
+            groups.tentative_members(min(group)),
+        )
         for group in groups.sets.groups()
         if len(group) > 1 or group & links.keys()
     )
