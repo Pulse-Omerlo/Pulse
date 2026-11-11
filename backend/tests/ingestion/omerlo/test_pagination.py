@@ -65,6 +65,25 @@ def test_absolute_next_url_on_the_same_host_is_followed_as_is(client):
 
 
 @respx.mock
+def test_next_path_from_the_host_is_followed_with_its_own_query(client):
+    # Arrange: staging answers with the path under /api, cursor and parameters included.
+    next_path = f"/api{PATH}?after=g3QA&limit=10&sort_by=updated_at-desc"
+    second = respx.get(URL, params={"after": "g3QA"}).mock(return_value=page([{"id": "2"}]))
+    respx.get(URL).mock(return_value=page([{"id": "1"}], next_path))
+
+    # Act
+    items = list(paginate(client, PATH, page_size=10, params={"sort_by": "updated_at-desc"}))
+
+    # Assert
+    assert [i["id"] for i in items] == ["1", "2"]
+    assert dict(second.calls.last.request.url.params) == {
+        "after": "g3QA",
+        "limit": "10",
+        "sort_by": "updated_at-desc",
+    }
+
+
+@respx.mock
 def test_next_url_on_another_host_is_refused(client):
     respx.get(URL).mock(return_value=page([{"id": "1"}], "https://elsewhere.test/steal"))
 
