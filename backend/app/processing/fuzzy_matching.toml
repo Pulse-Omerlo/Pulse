@@ -1,0 +1,37 @@
+# AI contribution: 50% or more AI-generated
+# Tier 2 fuzzy name matching of organizations (app/processing/fuzzy_config.py reads this).
+# A score is 0 to 1 on normalized names; pairs at or above the threshold are proposed.
+# Measured on the synthetic ground truth with `uv run python -m app.tier1_report --sweep`.
+threshold = 0.87
+
+# Blocking: only records sharing a block are compared.
+# Name tokens shorter than this never form a block.
+min_token_length = 3
+# Tokens form blocks by their first letters, so a typo after them still shares a block.
+prefix_length = 4
+# A token in more than this share of the tenant's records (and in more than
+# min_common_count records) is too common to block on.
+max_token_share = 0.1
+min_common_count = 10
+# A block with more records than this is not expanded, so a common key cannot make
+# the comparison quadratic in the tenant size.
+max_block_size = 50
+
+# Words that describe what an organization does rather than which one it is. They never
+# form a block, and the rest of the name must also be similar for a pair to match, so
+# "Restaurant Chez Marie" and "Restaurant Chez Mario" stay apart. Names are compared
+# after normalization: lowercase, no accents, "&" and "et" become "and".
+generic_tokens = [
+  "and", "de", "des", "du", "la", "le", "les", "l", "d", "a", "au", "aux", "en", "et",
+  "the", "of", "for",
+  "chez", "fils", "freres", "associes", "partenaires",
+  "groupe", "group", "compagnie", "entreprise", "entreprises", "societe",
+  "services", "service", "solutions", "consultants", "consulting", "conseil", "conseils",
+  "boulangerie", "patisserie", "restaurant", "resto", "cafe", "bistro", "bar", "brasserie",
+  "microbrasserie", "epicerie", "marche", "pharmacie", "clinique", "dentaire", "medicale",
+  "garage", "construction", "constructions", "renovation", "renovations", "transport",
+  "transports", "imprimerie", "cabinet", "avocats", "notaires", "comptables",
+  "technologies", "technologie", "tech", "informatique", "media", "medias",
+  "cooperative", "centre", "center", "culturel", "chambre", "commerce", "festival", "ete",
+  "fondation", "foundation", "association", "club", "institut", "ecole",
+]
