@@ -22,6 +22,7 @@ from app.ingestion.omerlo.mapping.batch import map_records
 from app.models import Source, SourceRecord, SyncRun
 from app.processing.entity_resolution import MatchResult, match_organizations
 from app.services.industry import ClassificationReport, classify_organizations
+from app.services.link_recheck import LINK_RECHECK_KEY, RecheckResult, recheck_links
 from app.services.record_changes import record_changes
 from app.services.source_records import close_unseen, upsert_records
 from app.storage.archive import PayloadArchive
@@ -42,6 +43,8 @@ WorkspaceWatermarks = dict[str, dict[str, datetime]]
 ChangeDetector = Callable[[Session, SyncRun], dict[str, int]]
 # Classifies the tenant's organizations in the caller's transaction after a successful run.
 Classifier = Callable[[Session, uuid.UUID], ClassificationReport]
+# Drops automatic org links whose evidence failed after versioning carried them.
+Rechecker = Callable[[Session, SyncRun, list[tuple[uuid.UUID, uuid.UUID]]], RecheckResult]
 
 
 @dataclass
@@ -103,6 +106,7 @@ def run_sync(
     *,
     full: bool = False,
     detect_changes: ChangeDetector = record_changes,
+    recheck: Rechecker | None = None,
     classify: Classifier | None = None,
     now: Callable[[], datetime] = utc_now,
 ) -> SyncRun:
@@ -133,7 +137,17 @@ def run_sync(
                     archive_records(session, archive, run, archived)
                     # Kept even if storing fails, so the run can be reprocessed from the archive.
                     session.commit()
-                    counts.update(store(session, run, source, fetched, reader, detect_changes))
+                    counts.update(
+                        store(
+                            session,
+                            run,
+                            source,
+                            fetched,
+                            reader,
+                            detect_changes,
+                            recheck or recheck_links,
+                        )
+                    )
                     finish(run, "succeeded", counts, now())
                     session.commit()
                 finally:
@@ -242,6 +256,7 @@ def store(
     fetched: Fetched,
     reader: SourceReader,
     detect_changes: ChangeDetector,
+    recheck: Rechecker | None = None,
 ) -> dict[str, int]:
     """Map and store the fetched records as versions and advance the watermarks.
 
@@ -262,6 +277,16 @@ def store(
         removed = close_unseen(
             session, run, keep={f.external_id for f in mapped.failures}, kinds=fetched.kinds
         )
+    rechecked = (recheck or recheck_links)(session, run, upserted.carried)
+    run.counts = {
+        **(run.counts or {}),
+        LINK_RECHECK_KEY: {
+            "checked": rechecked.checked,
+            "kept": rechecked.kept,
+            "dropped": rechecked.dropped,
+            "unverifiable": rechecked.unverifiable,
+        },
+    }
     # Reads the versions this run opened and closed, so it comes after both.
     detect_changes(session, run)
     advance_watermarks(source, fetched)
