@@ -21,6 +21,7 @@ from app.models import (
 )
 from app.services.source_records import (
     close_deleted,
+    close_dropped_children,
     close_unseen,
     upsert_records,
     version_as_of,
@@ -344,6 +345,52 @@ def test_a_deletion_only_closes_records_of_its_kind_and_source(session, runs):
     # Assert
     assert removed == []
     assert all(version.valid_to is None for version in versions(session, "org-1"))
+
+
+def event_session(external_id: str, event_id: str) -> MappedRecord:
+    return MappedRecord(
+        kind="event_session",
+        external_id=external_id,
+        workspace_id=None,
+        name_normalized=f"session {external_id}",
+        attributes={"event_id": event_id},
+    )
+
+
+def test_sessions_dropped_from_a_read_event_are_closed_and_marked_removed(session, runs):
+    # Arrange
+    first, second = runs.next(), runs.next()
+    upsert_records(
+        session,
+        first,
+        [event_session("s1", "e1"), event_session("s2", "e1"), event_session("s3", "e2")],
+    )
+    upsert_records(session, second, [event_session("s1", "e1")])
+
+    # Act
+    removed = close_dropped_children(session, second, "event_session", "event_id", ["e1"])
+
+    # Assert
+    assert removed == ["s2"]
+    [version] = versions(session, "s2")
+    assert (version.valid_to, version.removed_run) == (second.started_at, second.id)
+    assert versions(session, "s1")[0].valid_to is None
+    assert versions(session, "s3")[0].valid_to is None
+
+
+def test_sessions_that_could_not_be_mapped_are_not_taken_for_dropped(session, runs):
+    # Arrange
+    first, second = runs.next(), runs.next()
+    upsert_records(session, first, [event_session("s1", "e1"), event_session("s2", "e1")])
+
+    # Act
+    removed = close_dropped_children(
+        session, second, "event_session", "event_id", ["e1"], keep=["s2"]
+    )
+
+    # Assert
+    assert removed == ["s1"]
+    assert versions(session, "s2")[0].valid_to is None
 
 
 def test_removal_only_closes_records_of_the_runs_own_source(session, runs):

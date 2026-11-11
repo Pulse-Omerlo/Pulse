@@ -200,6 +200,30 @@ def close_deleted(
     return sorted(closed)
 
 
+def close_dropped_children(
+    session: Session,
+    run: SyncRun,
+    kind: str,
+    parent_key: str,
+    parent_ids: Iterable[str],
+    *,
+    keep: Collection[str] = (),
+) -> list[str]:
+    """Close as removed the current `kind` records of `parent_ids` that `run` did not see.
+
+    For lists the source always returns whole, such as an event's sessions. The parent's
+    id is read from `attributes[parent_key]`; `keep` is as in `close_unseen`.
+    """
+    conditions = [SourceRecord.kind == kind, SourceRecord.last_seen_run != run.id]
+    if keep:
+        conditions.append(SourceRecord.external_id.not_in(list(keep)))
+    closed: list[str] = []
+    for batch in batched(sorted(set(parent_ids)), BATCH_SIZE):
+        parent = SourceRecord.attributes[parent_key].astext
+        closed += close_current(session, run, *conditions, parent.in_(batch))
+    return sorted(closed)
+
+
 def close_current(session: Session, run: SyncRun, *conditions: ColumnElement[bool]) -> list[str]:
     """Close the current versions of the run's source matching `conditions` as removed by `run`."""
     statement = (

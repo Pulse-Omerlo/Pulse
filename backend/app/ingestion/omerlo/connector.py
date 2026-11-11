@@ -132,6 +132,11 @@ class OmerloConnector:
                 break  # newest first: every remaining record is older still
             yield from self._read_record(record)
 
+    @property
+    def reads_event_sessions(self) -> bool:
+        """Whether each event read comes with its whole session list."""
+        return "event" in self._entity_kinds and self._event_sessions
+
     def _read_record(self, summary: RawRecord) -> list[RawRecord]:
         """The record's detail, metadata and sessions, or only the summary flagged deleted.
 

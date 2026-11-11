@@ -39,10 +39,11 @@ class FakeConnector:
 
     community_kinds = ("organization", "person")
 
-    def __init__(self, community=None, reference=(), error=None):
+    def __init__(self, community=None, reference=(), error=None, sessions=True):
         self.community = community or {}
         self.reference = list(reference)
         self.error = error
+        self.reads_event_sessions = sessions
         self.calls = []
 
     def workspaces(self):
@@ -137,6 +138,26 @@ def test_fetch_keeps_records_reported_deleted_apart_but_counts_them_for_the_wate
     assert [r.external_id for r in fetched.records] == ["o1"]
     assert fetched.deleted == [gone]
     assert fetched.workspace_newest == {"ws-1": {"organization": T2}}
+
+
+def event_records():
+    return [
+        raw("event", "e1", T1),
+        replace(raw("event_session", "s1", T1, "e1"), payload={"id": "s1", "event_id": "e1"}),
+        replace(raw("event", "e2", T1), deleted=True),
+    ]
+
+
+@pytest.mark.parametrize(("sessions", "events"), [(True, {"e1", "e2"}), (False, set())])
+def test_fetch_lists_the_events_whose_whole_session_list_was_read(sessions, events):
+    # Arrange
+    connector = FakeConnector(community={("person", "ws-1"): event_records()}, sessions=sessions)
+
+    # Act
+    fetched = fetch(connector, source(), full=False)
+
+    # Assert
+    assert fetched.session_events == events
 
 
 def test_read_watermarks_skips_values_that_are_not_timestamps():
@@ -269,6 +290,23 @@ def test_records_reported_deleted_are_removed_in_any_run(session, stored, mocker
     assert run.counts["fetched"] == 1
     assert [r.external_id for r in archive.call_args.args[3]] == ["o1"]
     assert [r.external_id for r in upsert.call_args.args[2]] == ["o1"]
+
+
+def test_sessions_missing_from_a_read_event_are_removed(session, stored, mocker):
+    # Arrange
+    dropped = mocker.patch.object(sync_runs, "close_dropped_children", return_value=["s2"])
+    mocker.patch.object(sync_runs, "close_deleted", return_value=[])
+    connector = FakeConnector(community={("person", "ws-1"): event_records()})
+
+    # Act
+    run = run_sync(session, source(), OmerloReader(connector), archive=None, now=clock())
+
+    # Assert
+    assert run.status == "succeeded"
+    dropped.assert_called_once_with(
+        session, run, "event_session", "event_id", {"e1", "e2"}, keep=set()
+    )
+    assert run.counts["removed"] == 1
 
 
 def test_a_fetch_error_fails_the_run_and_stores_nothing(session, stored):

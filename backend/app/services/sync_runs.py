@@ -21,7 +21,12 @@ from app.ingestion.omerlo.mapping.batch import map_records
 from app.models import Source, SyncRun
 from app.services.industry import ClassificationReport, classify_organizations
 from app.services.record_changes import record_changes
-from app.services.source_records import close_deleted, close_unseen, upsert_records
+from app.services.source_records import (
+    close_deleted,
+    close_dropped_children,
+    close_unseen,
+    upsert_records,
+)
 from app.storage.archive import PayloadArchive
 from app.storage.raw_records import archive_records
 
@@ -54,6 +59,9 @@ class Fetched:
     archive_only: list[RawRecord] = field(default_factory=list)
     # Records the source reported deleted; their current versions are closed as removed.
     deleted: list[RawRecord] = field(default_factory=list)
+    # Events whose whole session list was read, or that were deleted; their sessions
+    # missing from this run are removed.
+    session_events: set[str] = field(default_factory=set)
 
 
 class SourceReader(Protocol):
@@ -189,6 +197,10 @@ def fetch(connector: OmerloConnector, source: Source, *, full: bool) -> Fetched:
             records = list(connector.fetch_community(kind, workspace_id, since))
             fetched.records += [r for r in records if not r.deleted]
             fetched.deleted += [r for r in records if r.deleted]
+            if connector.reads_event_sessions:
+                fetched.session_events.update(
+                    r.external_id for r in records if r.entity_kind == "event"
+                )
             latest = newest(r for r in records if r.entity_kind == kind)
             if latest is not None:
                 fetched.workspace_newest.setdefault(workspace_id, {})[kind] = latest
@@ -217,11 +229,13 @@ def store(
             for failure in mapped.failures[:MAX_REPORTED_FAILURES]
         ]
     upserted = upsert_records(session, run, mapped.records)
+    failed = {f.external_id for f in mapped.failures}
     removed = close_reported_deleted(session, run, fetched.deleted)
+    removed += close_dropped_children(
+        session, run, "event_session", "event_id", fetched.session_events, keep=failed
+    )
     if run.mode == "full":
-        removed += close_unseen(
-            session, run, keep={f.external_id for f in mapped.failures}, kinds=fetched.kinds
-        )
+        removed += close_unseen(session, run, keep=failed, kinds=fetched.kinds)
     # Reads the versions this run opened and closed, so it comes after both.
     detect_changes(session, run)
     advance_watermarks(source, fetched)

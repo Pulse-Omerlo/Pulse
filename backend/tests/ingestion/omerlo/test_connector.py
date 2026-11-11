@@ -271,6 +271,19 @@ def test_metadata_and_sessions_can_be_switched_off(api, client):
     assert routes["sessions"].call_count == 0
 
 
+@pytest.mark.parametrize(
+    ("options", "reads"),
+    [
+        ({}, True),
+        ({"event_sessions": False}, False),
+        ({"entity_kinds": ["organization"]}, False),
+    ],
+)
+def test_the_connector_says_whether_it_reads_whole_session_lists(client, options, reads):
+    # Act / Assert
+    assert OmerloConnector(client, **options).reads_event_sessions is reads
+
+
 def test_detail_without_a_data_object_raises(api, client):
     record, routes = add_record(api, "person", "p1")
     routes["detail"].mock(return_value=httpx.Response(200, json={"data": None}))
