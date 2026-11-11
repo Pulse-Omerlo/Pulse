@@ -1,0 +1,19 @@
+# Release 1 demo: tech and health organizations that employ almost nobody.
+seed = 490
+organizations = 120
+people = 300
+locales = ["fr"]
+
+[sectors]          # share of organizations per NAICS sector, sums to 1
+"54" = 0.25        # professional and tech services
+"72" = 0.20        # food and lodging
+"62" = 0.15        # health
+"81" = 0.40        # other services
+
+[gaps]             # planted gaps: share of people in that sector
+"54" = 0.03        # 25% of organizations, 3% of people
+"62" = 0.0         # health organizations with no people at all
+
+[duplicates]
+organizations = 0.12
+people = 0.04
