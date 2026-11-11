@@ -3,7 +3,7 @@
 
 import pytest
 from alembic import command
-from sqlalchemy import delete
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.tenancy import SYSTEM_KEY, TenantSession
@@ -13,18 +13,22 @@ from tests.integration.test_entity_resolution import setup_records
 pytestmark = pytest.mark.integration
 
 
-def fuzzy_link(session, tenant_id, record_id):
-    organization = Organization(tenant_id=tenant_id, display_name="Boulangerie Tremblay")
-    session.add(organization)
+def organization(session, tenant_id, name, merged_into=None):
+    item = Organization(tenant_id=tenant_id, display_name=name, merged_into=merged_into)
+    session.add(item)
     session.flush()
+    return item.id
+
+
+def link(session, tenant_id, record_id, organization_id, method):
     session.add(
         OrgLink(
             tenant_id=tenant_id,
             source_record_id=record_id,
-            organization_id=organization.id,
-            method="fuzzy",
+            organization_id=organization_id,
+            method=method,
             confidence=0.8,
-            decided_by="tier2:tier2-v1",
+            decided_by="test",
             evidence=[],
         )
     )
@@ -35,44 +39,46 @@ def system_session(database):
     return TenantSession(bind=database, info={SYSTEM_KEY: True})
 
 
-def delete_fuzzy_links(database):
+def linked_organizations(database):
+    """Three organizations: fuzzy links only, a fuzzy and a domain link, and fuzzy links
+    only but with another organization merged into it."""
     with system_session(database) as session:
-        session.execute(delete(OrgLink).where(OrgLink.method == "fuzzy"))
+        tenant, _, _, records = setup_records(session, [{}, {}, {}, {}])
+        ids = [record.id for record in records]
+        only_fuzzy = organization(session, tenant.id, "Only fuzzy")
+        mixed = organization(session, tenant.id, "Mixed")
+        survivor = organization(session, tenant.id, "Survivor")
+        organization(session, tenant.id, "Merged", merged_into=survivor)
+        link(session, tenant.id, ids[0], only_fuzzy, "fuzzy")
+        link(session, tenant.id, ids[1], mixed, "domain")
+        link(session, tenant.id, ids[2], mixed, "fuzzy")
+        link(session, tenant.id, ids[3], survivor, "fuzzy")
         session.commit()
+        return tenant.id, ids, (only_fuzzy, mixed, survivor)
 
 
-def test_downgrade_refuses_to_drop_fuzzy_links(migrated_database, alembic_config):
-    # Arrange
-    with system_session(migrated_database) as session:
-        _, _, _, records = setup_records(session, [{}])
-        ids = (records[0].tenant_id, records[0].id)
-        fuzzy_link(session, *ids)
-        session.commit()
-    # Act
-    try:
-        with pytest.raises(RuntimeError) as error:
-            command.downgrade(alembic_config, "0009")
-    finally:
-        # The fixture downgrades to base afterwards, which needs the link gone.
-        delete_fuzzy_links(migrated_database)
-    # Assert
-    assert "1 organization links use the fuzzy method" in str(error.value)
-
-
-def test_downgrade_without_fuzzy_links_restores_the_old_constraint(
+def test_downgrade_removes_fuzzy_links_and_the_organizations_they_leave_empty(
     migrated_database, alembic_config
 ):
     # Arrange
+    _, ids, (only_fuzzy, mixed, survivor) = linked_organizations(migrated_database)
+    # Act
+    command.downgrade(alembic_config, "0009")
+    # Assert
     with system_session(migrated_database) as session:
-        _, _, _, records = setup_records(session, [{}])
-        ids = (records[0].tenant_id, records[0].id)
-        fuzzy_link(session, *ids)
-        session.commit()
-    delete_fuzzy_links(migrated_database)
+        links = session.execute(select(OrgLink.source_record_id, OrgLink.method)).all()
+        organizations = set(session.scalars(select(Organization.id)))
+    assert links == [(ids[1], "domain")]
+    assert only_fuzzy not in organizations
+    assert {mixed, survivor} <= organizations
+
+
+def test_downgrade_restores_the_constraint_without_fuzzy(migrated_database, alembic_config):
+    # Arrange
+    tenant_id, ids, (_, mixed, _) = linked_organizations(migrated_database)
     command.downgrade(alembic_config, "0009")
     # Act
     with system_session(migrated_database) as session, pytest.raises(IntegrityError) as error:
-        fuzzy_link(session, *ids)
+        link(session, tenant_id, ids[0], mixed, "fuzzy")
     # Assert
     assert "ck_org_link_method" in str(error.value)
-    command.upgrade(alembic_config, "head")
