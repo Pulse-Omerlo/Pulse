@@ -82,7 +82,8 @@ def link_confidence(edge: MatchCandidateData) -> float:
 
 
 def candidate_score(edge: MatchCandidateData) -> float:
-    return rule_weight(edge.rule) if edge.score is None else edge.score
+    """Comparable across rules, so a fuzzy candidate never ranks above a Tier 1 one."""
+    return link_confidence(edge)
 
 
 def rule_set_version(rule: str) -> str:

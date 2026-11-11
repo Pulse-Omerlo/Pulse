@@ -74,10 +74,26 @@ def test_fuzzy_link_confidence_stays_below_every_tier1_rule():
     assert match_rules.link_confidence(edge("domain")) == 1.0
 
 
-def test_candidate_score_is_the_similarity_or_the_rule_weight():
+def test_candidate_score_is_the_rule_weight_scaled_by_the_similarity():
     # Act / Assert
-    assert match_rules.candidate_score(fuzzy(0.91, rule="fuzzy_name")) == 0.91
+    assert match_rules.candidate_score(fuzzy(0.91, rule="fuzzy_name")) == 0.455
+    assert match_rules.candidate_score(fuzzy(0.91)) == 0.819
     assert match_rules.candidate_score(edge("name_only")) == 0.5
+
+
+def test_candidates_rank_tier1_rules_above_fuzzy_ones():
+    # Arrange
+    # Equal names are Tier 1 rules, so a fuzzy similarity stays below 1.
+    items = [
+        fuzzy(0.99, rule="fuzzy_name"),
+        edge("name_only"),
+        fuzzy(1.0),
+        edge("name_city"),
+    ]
+    # Act
+    ranked = sorted(items, key=match_rules.candidate_score, reverse=True)
+    # Assert
+    assert [item.rule for item in ranked] == ["name_city", "fuzzy", "name_only", "fuzzy_name"]
 
 
 def test_decisions_name_their_tier_and_rule_version():

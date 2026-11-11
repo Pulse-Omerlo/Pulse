@@ -68,7 +68,10 @@ def test_similar_names_without_a_secondary_signal_wait_for_review(session):
     [saved] = candidates(session, tenant)
     # Assert
     assert first == MatchResult(0, 0, 1) and second == MatchResult()
-    assert saved.status == "pending" and saved.score == 0.875
+    # Ranked with the other rules; the similarity itself stays in the evidence.
+    assert saved.status == "pending" and saved.score == pytest.approx(0.5 * 0.875, abs=0.001)
+    similarity = next(e for e in saved.matched_fields if e["field"] == "name_similarity")
+    assert similarity["value"] == "0.875"
     assert {entry["rule"] for entry in saved.matched_fields} == {"fuzzy_name"}
     names = next(e for e in saved.matched_fields if e["field"] == "name_normalized")
     left, right = sorted(records, key=lambda record: record.id)
@@ -142,7 +145,7 @@ def test_manual_links_are_untouched_by_fuzzy_matches(session):
     result = match_organizations(session, tenant.id)
     [saved] = candidates(session, tenant)
     # Assert
-    assert result == MatchResult(0, 0, 1) and saved.score == 0.875
+    assert result == MatchResult(0, 0, 1) and saved.score == pytest.approx(0.9 * 0.875, abs=0.001)
     assert link_state(session, records) == before
     assert {link.method for link in manual} == {"manual"}
 
