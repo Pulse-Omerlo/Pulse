@@ -1,6 +1,7 @@
 # AI contribution: 50% or more AI-generated
 """Group matched records into organizations without touching the database."""
 
+import heapq
 from collections import Counter, defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -10,7 +11,7 @@ from uuid import UUID
 
 from app.models import SourceRecord
 from app.processing.cluster_groups import Group, Groups, Identifiers
-from app.processing.match_rules import MatchCandidateData, Pair, strength_key
+from app.processing.match_rules import TIER1_RULES, MatchCandidateData, Pair, strength_key
 from app.processing.organization_values import choose_display_values
 
 
@@ -125,26 +126,39 @@ def _new_links(
     edges: Sequence[MatchCandidateData],
     links: Mapping[UUID, LinkFacts],
 ) -> tuple[NewLink, ...]:
-    """Link each unlinked member through the kept edge that reaches it first.
+    """Link each unlinked member through the strongest kept edge that reaches it.
 
-    The graph search starts from the linked members, or from the smallest id for a new
-    organization, and follows edges strongest first.
+    Like Prim's algorithm: from the linked members (or, for a new organization, the
+    strongest edge), always take the strongest edge from a linked member to an unlinked
+    one, so a record reachable through a Tier 1 edge is never linked through a fuzzy one.
     """
     adjacency = defaultdict(list)
     for edge in edges:
-        adjacency[edge.left].append((edge.right, edge))
-        adjacency[edge.right].append((edge.left, edge))
-    roots = sorted(group & links.keys()) or [min(group)]
-    linked, queue, result = set(roots) & links.keys(), list(roots), []
-    for record_id in queue:
-        for neighbor, edge in adjacency[record_id]:
-            if record_id not in linked:
-                result.append(NewLink(record_id, edge, neighbor))
-                linked.add(record_id)
-            if neighbor not in linked:
-                result.append(NewLink(neighbor, edge, record_id))
-                linked.add(neighbor)
-                queue.append(neighbor)
+        adjacency[edge.left].append((strength_key(edge), edge.right, edge))
+        adjacency[edge.right].append((strength_key(edge), edge.left, edge))
+    linked = set(group & links.keys())
+    result: list[NewLink] = []
+    if not linked:
+        if not edges:
+            return ()
+        first = min(edges, key=strength_key)
+        result += [
+            NewLink(first.left, first, first.right),
+            NewLink(first.right, first, first.left),
+        ]
+        linked = {first.left, first.right}
+    frontier = [item for record_id in linked for item in adjacency[record_id]]
+    heapq.heapify(frontier)
+    while frontier:
+        _, record_id, edge = heapq.heappop(frontier)
+        if record_id in linked:
+            continue
+        neighbor = edge.right if edge.left == record_id else edge.left
+        result.append(NewLink(record_id, edge, neighbor))
+        linked.add(record_id)
+        for item in adjacency[record_id]:
+            if item[1] not in linked:
+                heapq.heappush(frontier, item)
     return tuple(result)
 
 
@@ -239,6 +253,9 @@ def plan_clusters(
         ties = groups.tie_cuts(tier)
         for edge in tier:
             first, second = groups.root(edge.left), groups.root(edge.right)
+            # A weaker path between records already together would only be a worse link.
+            if first == second and edge.rule not in TIER1_RULES:
+                continue
             if edge in ties or (first != second and groups.blocked(edge, first, second)):
                 cut.append(edge)
                 continue
