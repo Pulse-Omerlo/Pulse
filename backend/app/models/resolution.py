@@ -9,6 +9,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, json_column, one_of, same_tenant_fk, tenant_id_column, uuid_pk
 
 LINK_METHODS = ("domain", "linkedin", "external_id", "name_city", "manual")
+AUTOMATIC_LINK_METHODS = frozenset(method for method in LINK_METHODS if method != "manual")
 CANDIDATE_STATUSES = ("pending", "accepted", "rejected")
 
 
@@ -35,21 +36,30 @@ class Organization(Base):
     """What PULSE believes is one real-world organization."""
 
     __tablename__ = "organization"
-    __table_args__ = (UniqueConstraint("tenant_id", "id"),)
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "id"),
+        same_tenant_fk("merged_into", "organization"),
+        CheckConstraint("merged_into IS NULL OR merged_into <> id", name="not_merged_into_itself"),
+        # Organizations merged into this one, so an old id resolves; indexes the foreign key.
+        Index("ix_organization_merged_into", "tenant_id", "merged_into"),
+    )
 
     id: Mapped[uuid.UUID] = uuid_pk()
     tenant_id: Mapped[uuid.UUID] = tenant_id_column()
     display_name: Mapped[str] = mapped_column(Text)
     primary_domain: Mapped[str | None] = mapped_column(Text)
+    # The organization this one was merged into; null while it is still in use.
+    merged_into: Mapped[uuid.UUID | None]
 
 
 class OrgLink(Base):
-    """The decision that a source record version belongs to an organization (#61).
+    """The decision that a source record version belongs to an organization.
 
     The version is the primary key, so each version belongs to at most one organization.
-    A new version starts unlinked: versioning (#58) must copy the link to it in the same
-    transaction that closes the old version. Current membership of an organization joins
-    source_record on valid_to IS NULL. The copy keeps the evidence of the original decision.
+    A new version starts unlinked: versioning must copy the link to it in the same
+    transaction that closes the old version. Current membership joins source_record on
+    valid_to IS NULL. Automatic links are re-checked when matching fields change on a
+    new version; the old version keeps its link.
     """
 
     __tablename__ = "org_link"

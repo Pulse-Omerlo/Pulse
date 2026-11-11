@@ -14,6 +14,7 @@ from app.models import Source
 from app.processing.entity_resolution import MatchResult
 from app.services import sync_runs
 from app.services.industry import ClassificationReport
+from app.services.link_recheck import LINK_RECHECK_KEY, RecheckResult
 from app.services.source_records import UpsertResult
 from app.services.sync_runs import (
     Fetched,
@@ -178,6 +179,12 @@ def measured(mocker):
     return mocker.patch.object(sync_runs, "measure_sector_mix")
 
 
+@pytest.fixture(autouse=True)
+def rechecked(mocker):
+    """Automatic link recheck inside store, mocked."""
+    return mocker.patch.object(sync_runs, "recheck_links", return_value=RecheckResult())
+
+
 @pytest.fixture
 def stored(mocker):
     """The archive and the versioned upsert, mocked."""
@@ -220,6 +227,12 @@ def test_a_successful_run_records_its_counts_and_advances_the_watermarks(session
     assert run.counts == {
         "fetched": 1,
         "cleaning_flags": {},
+        LINK_RECHECK_KEY: {
+            "checked": 0,
+            "kept": 0,
+            "dropped": 0,
+            "unverifiable": 0,
+        },
         "new": 1,
         "changed": 1,
         "unchanged": 2,
@@ -558,4 +571,66 @@ def test_a_failed_sector_mix_leaves_the_run_succeeded(session, stored, measured)
 
     # Assert
     assert run.status == "succeeded"
+    session.rollback.assert_called_once()
+
+
+def test_recheck_runs_after_close_and_before_detect(session, stored, rechecked):
+    order: list[str] = []
+    _, _, close = stored
+    close.side_effect = lambda *args, **kwargs: order.append("close") or ["o5"]
+    rechecked.side_effect = lambda *args, **kwargs: (
+        order.append("recheck") or RecheckResult(checked=1, kept=0, dropped=1, unverifiable=0)
+    )
+
+    run = run_sync(
+        session,
+        source(),
+        org_reader(),
+        archive=None,
+        full=True,
+        now=clock(),
+        detect_changes=lambda *args: order.append("detect") or {},
+    )
+
+    assert order == ["close", "recheck", "detect"]
+    assert run.counts[LINK_RECHECK_KEY] == {
+        "checked": 1,
+        "kept": 0,
+        "dropped": 1,
+        "unverifiable": 0,
+    }
+    rechecked.assert_called_once()
+    assert rechecked.call_args.args[2] == []
+    assert session.commit.call_count == 6
+
+
+def test_recheck_receives_carried_pairs(session, stored, rechecked):
+    _, upsert, _ = stored
+    carried = [(uuid.uuid4(), uuid.uuid4())]
+    upsert.return_value = UpsertResult(["o1"], carried=carried)
+
+    run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    assert rechecked.call_args.args[2] == carried
+
+
+def test_a_fetch_error_does_not_recheck(session, stored, rechecked):
+    archive, upsert, _ = stored
+    connector = FakeConnector(error=httpx.ConnectError("connection refused"))
+
+    run_sync(session, source(), OmerloReader(connector), archive=None, now=clock())
+
+    rechecked.assert_not_called()
+    archive.assert_not_called()
+    upsert.assert_not_called()
+
+
+def test_a_recheck_error_fails_the_run_and_rolls_store_back(session, stored, rechecked):
+    rechecked.side_effect = RuntimeError("evidence check failed")
+
+    run = run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    assert run.status == "failed"
+    assert run.counts == {**dict.fromkeys(sync_runs.COUNT_KEYS, 0), "fetched": 1}
+    assert "link_recheck" not in run.counts
     session.rollback.assert_called_once()
