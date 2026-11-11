@@ -3,7 +3,7 @@
 
 from collections import defaultdict, deque
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from itertools import combinations
 from logging import getLogger
 from uuid import UUID, uuid4
@@ -58,6 +58,19 @@ class PersonMatchResult:
     links_created: int = 0
     candidates_created: int = 0
     people_merged: int = 0
+
+
+@dataclass
+class _PersonRun:
+    """State of one people-matching pass."""
+
+    session: Session
+    tenant_id: UUID
+    records: dict[UUID, SourceRecord]
+    links: dict[UUID, PersonLink]
+    decisions: dict[Pair, MatchCandidate]
+    result: PersonMatchResult = field(default_factory=PersonMatchResult)
+    merged_person_ids: set[UUID] = field(default_factory=set)
 
 
 def identifier_values(record: SourceRecord, key: str) -> set[str]:
@@ -253,6 +266,170 @@ def person_display_name(record: SourceRecord) -> str:
     return named or record.name_normalized or record.external_id
 
 
+def _current_people(session: Session, tenant_id: UUID) -> dict[UUID, SourceRecord]:
+    query = (
+        select(SourceRecord)
+        .where(
+            SourceRecord.tenant_id == tenant_id,
+            SourceRecord.kind == "person",
+            SourceRecord.valid_to.is_(None),
+        )
+        .order_by(SourceRecord.id)
+    )
+    return {record.id: record for record in session.scalars(query)}
+
+
+def _current_person_links(session: Session, tenant_id: UUID) -> dict[UUID, PersonLink]:
+    query = (
+        select(PersonLink)
+        .join(SourceRecord, SourceRecord.id == PersonLink.source_record_id)
+        .where(
+            PersonLink.tenant_id == tenant_id,
+            SourceRecord.tenant_id == tenant_id,
+            SourceRecord.kind == "person",
+            SourceRecord.valid_to.is_(None),
+        )
+    )
+    return {link.source_record_id: link for link in session.scalars(query)}
+
+
+def _person_decisions(
+    session: Session, tenant_id: UUID, records: dict[UUID, SourceRecord]
+) -> dict[Pair, MatchCandidate]:
+    return {
+        (candidate.left_record_id, candidate.right_record_id): candidate
+        for candidate in session.scalars(
+            select(MatchCandidate).where(MatchCandidate.tenant_id == tenant_id)
+        )
+        if candidate.left_record_id in records and candidate.right_record_id in records
+    }
+
+
+def _add_person_candidate(run: _PersonRun, match: PersonMatch) -> None:
+    if match.providePair in run.decisions:
+        return
+    candidate = MatchCandidate(
+        tenant_id=run.tenant_id,
+        left_record_id=match.left,
+        right_record_id=match.right,
+        score=PERSON_RULE_WEIGHTS[match.rule],
+        matched_fields=evidence(match, match.right),
+        status="pending",
+    )
+    run.session.add(candidate)
+    run.decisions[match.providePair] = candidate
+    run.result.candidates_created += 1
+
+
+def _group_is_rejected(run: _PersonRun, group: set[UUID]) -> bool:
+    return any(
+        left in group and right in group and candidate.status == "rejected"
+        for (left, right), candidate in run.decisions.items()
+    )
+
+
+def _group_is_unsafe(
+    run: _PersonRun, group: set[UUID], person_ids: set[UUID], members: set[UUID]
+) -> bool:
+    return (
+        _group_is_rejected(run, group)
+        or len(person_ids) > 1
+        or conflicting_person_identifiers(run.records[key] for key in members)
+    )
+
+
+def _ensure_person(run: _PersonRun, group: set[UUID], person_ids: set[UUID]) -> UUID:
+    if person_ids:
+        return next(iter(person_ids))
+    first = run.records[min(group)]
+    person_id = uuid4()
+    run.session.add(
+        Person(
+            id=person_id,
+            tenant_id=run.tenant_id,
+            display_name=person_display_name(first),
+        )
+    )
+    run.session.flush()
+    run.result.people_created += 1
+    return person_id
+
+
+def _link_strong_group(
+    run: _PersonRun, group: set[UUID], edges: list[PersonMatch], person_id: UUID
+) -> None:
+    """Walk strong edges from existing members and create missing person links."""
+    adjacency: dict[UUID, list[tuple[UUID, PersonMatch]]] = defaultdict(list)
+    for match in edges:
+        adjacency[match.left].append((match.right, match))
+        adjacency[match.right].append((match.left, match))
+
+    roots = sorted(group & run.links.keys())
+    queue = deque(roots or [min(group)])
+    visited = set(queue)
+
+    while queue:
+        record_id = queue.popleft()
+        for neighbor, match in adjacency[record_id]:
+            if neighbor in visited:
+                continue
+            for endpoint, other in ((record_id, neighbor), (neighbor, record_id)):
+                if endpoint in run.links:
+                    continue
+                link = PersonLink(
+                    tenant_id=run.tenant_id,
+                    source_record_id=endpoint,
+                    person_id=person_id,
+                    method=match.rule,
+                    confidence=PERSON_RULE_WEIGHTS[match.rule],
+                    decided_by=f"tier1:{RULE_VERSION}",
+                    evidence=evidence(match, other),
+                )
+                run.session.add(link)
+                run.links[endpoint] = link
+                run.result.links_created += 1
+                run.merged_person_ids.add(person_id)
+            visited.add(neighbor)
+            queue.append(neighbor)
+
+
+def _apply_strong_groups(
+    run: _PersonRun, matches: list[PersonMatch], changed_ids: set[UUID] | None
+) -> None:
+    for group in components(matches):
+        if not has_changed_record(group, changed_ids):
+            continue
+        edges = [
+            match
+            for match in matches
+            if match.strong and match.left in group and match.right in group
+        ]
+        person_ids = {
+            run.links[record_id].person_id for record_id in group if record_id in run.links
+        }
+        members = group | {
+            record_id for record_id, link in run.links.items() if link.person_id in person_ids
+        }
+        if _group_is_unsafe(run, group, person_ids, members):
+            for match in edges:
+                _add_person_candidate(run, match)
+            continue
+        person_id = _ensure_person(run, group, person_ids)
+        _link_strong_group(run, group, edges, person_id)
+
+
+def _add_weak_candidates(
+    run: _PersonRun, matches: list[PersonMatch], changed_ids: set[UUID] | None
+) -> None:
+    for match in matches:
+        if match.strong or not has_changed_record([match.left, match.right], changed_ids):
+            continue
+        left_link, right_link = run.links.get(match.left), run.links.get(match.right)
+        if left_link and right_link and left_link.person_id == right_link.person_id:
+            continue
+        _add_person_candidate(run, match)
+
+
 def match_people(
     session: Session, tenant_id: UUID, changed_ids: set[UUID] | None = None
 ) -> PersonMatchResult:
@@ -262,145 +439,17 @@ def match_people(
             raise ValueError(f"Unknown tenant {tenant_id}")
 
         session.flush()
-        records = {
-            record.id: record
-            for record in session.scalars(
-                select(SourceRecord)
-                .where(
-                    SourceRecord.tenant_id == tenant_id,
-                    SourceRecord.kind == "person",
-                    SourceRecord.valid_to.is_(None),
-                )
-                .order_by(SourceRecord.id)
-            )
-        }
-        links = {
-            link.source_record_id: link
-            for link in session.scalars(
-                select(PersonLink)
-                .join(SourceRecord, SourceRecord.id == PersonLink.source_record_id)
-                .where(
-                    PersonLink.tenant_id == tenant_id,
-                    SourceRecord.tenant_id == tenant_id,
-                    SourceRecord.kind == "person",
-                    SourceRecord.valid_to.is_(None),
-                )
-            )
-        }
-        decisions = {
-            (candidate.left_record_id, candidate.right_record_id): candidate
-            for candidate in session.scalars(
-                select(MatchCandidate).where(MatchCandidate.tenant_id == tenant_id)
-            )
-            if candidate.left_record_id in records and candidate.right_record_id in records
-        }
-
-        matches = blocked_person_matches(records.values())
-        people_created = links_created = candidates_created = 0
-        merged_person_ids: set[UUID] = set()
-
-        def add_candidate(match: PersonMatch) -> None:
-            nonlocal candidates_created
-            if match.providePair in decisions:
-                return
-            candidate = MatchCandidate(
-                tenant_id=tenant_id,
-                left_record_id=match.left,
-                right_record_id=match.right,
-                score=PERSON_RULE_WEIGHTS[match.rule],
-                matched_fields=evidence(match, match.right),
-                status="pending",
-            )
-            session.add(candidate)
-            decisions[match.providePair] = candidate
-            candidates_created += 1
-
-        for group in components(matches):
-            if not has_changed_record(group, changed_ids):
-                continue
-            edges = [
-                match
-                for match in matches
-                if match.strong and match.left in group and match.right in group
-            ]
-            person_ids = {links[record_id].person_id for record_id in group if record_id in links}
-            rejected = any(
-                left in group and right in group and candidate.status == "rejected"
-                for (left, right), candidate in decisions.items()
-            )
-            members = group | {
-                record_id for record_id, link in links.items() if link.person_id in person_ids
-            }
-            unsafe = (
-                rejected
-                or len(person_ids) > 1
-                or conflicting_person_identifiers(records[key] for key in members)
-            )
-            if unsafe:
-                for match in edges:
-                    add_candidate(match)
-                continue
-
-            if person_ids:
-                person_id = next(iter(person_ids))
-            else:
-                first = records[min(group)]
-                person_id = uuid4()
-                session.add(
-                    Person(
-                        id=person_id,
-                        tenant_id=tenant_id,
-                        display_name=person_display_name(first),
-                    )
-                )
-                session.flush()
-                people_created += 1
-
-            adjacency: dict[UUID, list[tuple[UUID, PersonMatch]]] = defaultdict(list)
-            for match in edges:
-                adjacency[match.left].append((match.right, match))
-                adjacency[match.right].append((match.left, match))
-
-            roots = sorted(group & links.keys())
-            queue = deque(roots or [min(group)])
-            visited = set(queue)
-
-            while queue:
-                record_id = queue.popleft()
-                for neighbor, match in adjacency[record_id]:
-                    if neighbor in visited:
-                        continue
-                    for endpoint, other in ((record_id, neighbor), (neighbor, record_id)):
-                        if endpoint in links:
-                            continue
-                        link = PersonLink(
-                            tenant_id=tenant_id,
-                            source_record_id=endpoint,
-                            person_id=person_id,
-                            method=match.rule,
-                            confidence=PERSON_RULE_WEIGHTS[match.rule],
-                            decided_by=f"tier1:{RULE_VERSION}",
-                            evidence=evidence(match, other),
-                        )
-                        session.add(link)
-                        links[endpoint] = link
-                        links_created += 1
-                        merged_person_ids.add(person_id)
-                    visited.add(neighbor)
-                    queue.append(neighbor)
-
-        for match in matches:
-            if match.strong or not has_changed_record([match.left, match.right], changed_ids):
-                continue
-            left_link, right_link = links.get(match.left), links.get(match.right)
-            if left_link and right_link and left_link.person_id == right_link.person_id:
-                continue
-            add_candidate(match)
-
-        session.flush()
-        return PersonMatchResult(
-            people_created=people_created,
-            links_created=links_created,
-            candidates_created=candidates_created,
-            people_merged=len(merged_person_ids),
+        records = _current_people(session, tenant_id)
+        run = _PersonRun(
+            session=session,
+            tenant_id=tenant_id,
+            records=records,
+            links=_current_person_links(session, tenant_id),
+            decisions=_person_decisions(session, tenant_id, records),
         )
+        matches = blocked_person_matches(records.values())
+        _apply_strong_groups(run, matches, changed_ids)
+        _add_weak_candidates(run, matches, changed_ids)
+        session.flush()
+        run.result.people_merged = len(run.merged_person_ids)
+        return run.result
