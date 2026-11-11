@@ -51,6 +51,7 @@ dependencies = [
     "python-dotenv==1.2.4",
     "python-multipart==0.0.32",
     "pyyaml==6.0.3",
+    "rapidfuzz>=3.14.6",
     "requests==2.34.2",
     "rich==15.0.0",
     "rich-toolkit==0.20.6",
