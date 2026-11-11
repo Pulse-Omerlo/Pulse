@@ -24,6 +24,7 @@ class FuzzyConfig:
     max_token_share: float
     min_common_count: int
     max_block_size: int
+    max_name_words: int
     generic_tokens: frozenset[str]
 
 
@@ -86,6 +87,7 @@ def parse_fuzzy_config(data: dict[str, Any]) -> FuzzyConfig:
         min_common_count=_whole(data, "min_common_count", 1, 100_000),
         # One block of 500 records is already 124,750 comparisons.
         max_block_size=_whole(data, "max_block_size", 2, 500),
+        max_name_words=_whole(data, "max_name_words", 1, 50),
         generic_tokens=_tokens(data),
     )
 

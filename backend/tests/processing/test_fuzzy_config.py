@@ -13,6 +13,7 @@ VALID = {
     "max_token_share": 0.1,
     "min_common_count": 10,
     "max_block_size": 50,
+    "max_name_words": 12,
     "generic_tokens": [" Groupe ", "de"],
 }
 
@@ -117,6 +118,7 @@ def test_file_is_read_once(config_file):
     config_file.write_text(
         "threshold = 0.9\nmin_token_length = 3\nprefix_length = 4\n"
         "max_token_share = 0.1\nmin_common_count = 10\nmax_block_size = 50\n"
+        "max_name_words = 12\n"
         'generic_tokens = ["de"]\n'
     )
     # Act

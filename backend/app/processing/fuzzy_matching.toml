@@ -16,6 +16,9 @@ min_common_count = 10
 # A block with more records than this is not expanded, so a common key cannot make
 # the comparison quadratic in the tenant size.
 max_block_size = 50
+# Only the first words of a name are compared word by word, so a very long name cannot
+# make one comparison slow.
+max_name_words = 12
 
 # Words that describe what an organization does rather than which one it is. They never
 # form a block, and the rest of the name must also be similar for a pair to match, so

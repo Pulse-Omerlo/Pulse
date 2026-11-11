@@ -1,5 +1,5 @@
 # AI contribution: 50% or more AI-generated
-"""Tier 2 blocking, scoring and decisions, on unsaved records."""
+"""Tier 2 scoring and decisions, on unsaved records."""
 
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -7,34 +7,8 @@ from uuid import UUID
 
 import pytest
 
-from app.models import SourceRecord
 from app.processing import fuzzy_matching as fm
-from app.processing.fuzzy_config import load_fuzzy_config
-
-TENANT = UUID(int=100)
-EXCLUDED = frozenset({"gmail.com"})
-CONFIG = load_fuzzy_config()
-
-
-def record(number, name, *, tenant=TENANT, city=None, phones=(), emails=(), **fields):
-    return SourceRecord(
-        **(
-            {
-                "id": UUID(int=number),
-                "tenant_id": tenant,
-                "kind": "organization",
-                "external_id": str(number),
-                "external_ids": {},
-                "name_normalized": name,
-                "city": city,
-                "attributes": {
-                    "identifiers": {"phones": list(phones), "emails": list(emails)},
-                    "cities": [city] if city else [],
-                },
-            }
-            | fields
-        )
-    )
+from tests.processing.fuzzy_helpers import CONFIG, EXCLUDED, record
 
 
 def match_rules(*records, config=CONFIG, known=frozenset()):
@@ -52,7 +26,7 @@ def match_rules(*records, config=CONFIG, known=frozenset()):
 )
 def test_similar_names_score_high(left, right, score):
     # Act / Assert
-    assert fm.similarity(left, right, CONFIG.generic_tokens) == pytest.approx(score, abs=0.001)
+    assert fm.similarity(left, right, CONFIG) == pytest.approx(score, abs=0.001)
 
 
 @pytest.mark.parametrize(
@@ -69,26 +43,26 @@ def test_similar_names_score_high(left, right, score):
 )
 def test_near_misses_stay_below_the_threshold(left, right):
     # Act
-    score = fm.similarity(left, right, CONFIG.generic_tokens)
+    score = fm.similarity(left, right, CONFIG)
     # Assert
     assert score < CONFIG.threshold
 
 
 def test_names_with_different_numbers_score_zero():
     # Act / Assert
-    assert fm.similarity("garage 2000", "garage 3000", CONFIG.generic_tokens) == 0.0
+    assert fm.similarity("garage 2000", "garage 3000", CONFIG) == 0.0
 
 
 def test_names_of_generic_words_only_score_zero():
     # Act / Assert
-    assert fm.similarity("groupe services", "groupe service", CONFIG.generic_tokens) == 0.0
+    assert fm.similarity("groupe services", "groupe service", CONFIG) == 0.0
 
 
 def test_threshold_is_inclusive():
     # Arrange
     left = record(1, "boulangerie tremblay", city="quebec")
     right = record(2, "boulangerie tremblai", city="quebec")
-    score = fm.similarity(left.name_normalized, right.name_normalized, CONFIG.generic_tokens)
+    score = fm.similarity(left.name_normalized, right.name_normalized, CONFIG)
     # Act
     at = match_rules(left, right, config=replace(CONFIG, threshold=score))
     above = match_rules(left, right, config=replace(CONFIG, threshold=score + 0.001))
@@ -212,107 +186,31 @@ def test_other_tenants_closed_versions_and_people_are_never_paired():
     assert match_rules(base, *others) == []
 
 
-def test_blocking_pairs_only_records_that_share_a_block():
-    # Arrange
-    records = [
-        record(1, "boulangerie tremblay"),
-        record(2, "boulangerie tremblai"),
-        record(3, "imprimerie gagnon"),
-        record(4, "transport roy", city="levis"),
-        record(5, "garage cote", city="levis"),
-    ]
-    # Act
-    blocking = fm.candidate_pairs(records, CONFIG)
-    # Assert
-    # "trem" is shared; "boulangerie" is generic; "roy" and "cote" share only the city.
-    assert blocking.pairs == {(records[0].id, records[1].id), (records[3].id, records[4].id)}
-    assert blocking.skipped_blocks == 0
+def counted_scores(monkeypatch):
+    calls = []
+    original = fm.score
+    monkeypatch.setattr(fm, "score", lambda *args: calls.append(args) or original(*args))
+    return calls
 
 
-def test_short_numeric_and_generic_tokens_are_not_blocking_keys():
-    # Arrange
-    item = record(1, "groupe ab 2000 tremblay")
-    # Act
-    keys = fm.block_keys(item, CONFIG, frozenset())
-    # Assert
-    assert keys == {("prefix", "trem")}
-
-
-def test_tokens_in_a_large_share_of_records_do_not_block():
-    # Arrange
-    common = replace(CONFIG, max_token_share=0.5, min_common_count=2)
-    rare = replace(CONFIG, max_token_share=0.5, min_common_count=1000)
-    records = [record(n, f"tremblay x{n}a") for n in range(1, 5)] + [record(9, "gagnon")]
-    # Act
-    with_share = fm.candidate_pairs(records, common)
-    without_share = fm.candidate_pairs(records, rare)
-    # Assert
-    # "tremblay" is in 4 of 5 records; every other token is unique.
-    assert with_share.pairs == frozenset()
-    assert len(without_share.pairs) == 6
-
-
-def test_block_over_the_cap_is_not_expanded(monkeypatch):
+def test_block_over_the_cap_is_never_scored_pair_by_pair(monkeypatch):
     # Arrange
     config = replace(CONFIG, max_block_size=50, min_common_count=1000)
     records = [record(n, f"tremblay {n}") for n in range(1, 201)]
-    calls = []
-    original = fm.similarity
-
-    def counting(*args, **kwargs):
-        calls.append(args)
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(fm, "similarity", counting)
+    calls = counted_scores(monkeypatch)
     # Act
-    blocking = fm.candidate_pairs(records, config)
     matches = fm.fuzzy_matches(records, EXCLUDED, config=config)
     # Assert
     # 200 records in one block would be 19,900 comparisons.
-    assert blocking.skipped_blocks == 1
-    assert blocking.pairs == frozenset()
     assert calls == [] and matches == []
 
 
-def test_block_under_the_cap_compares_each_pair_once(monkeypatch):
+def test_records_in_several_shared_blocks_are_scored_once(monkeypatch):
     # Arrange
-    config = replace(CONFIG, max_block_size=50)
     records = [record(n, f"tremblay {n}", city="quebec") for n in range(1, 11)]
-    calls = []
-    original = fm.similarity
-    monkeypatch.setattr(
-        fm, "similarity", lambda *args, **kwargs: calls.append(args) or original(*args, **kwargs)
-    )
+    calls = counted_scores(monkeypatch)
     # Act
-    fm.fuzzy_matches(records, EXCLUDED, config=config)
+    fm.fuzzy_matches(records, EXCLUDED, config=CONFIG)
     # Assert
     # The city and "trem" blocks hold the same ten records; each pair is scored once.
     assert len(calls) == 45
-
-
-def test_signals_read_identifiers_and_ignore_bad_values():
-    # Arrange
-    item = record(
-        1,
-        "x",
-        city="quebec",
-        attributes={
-            "cities": ["levis", 3],
-            "identifiers": {"phones": "not a list", "emails": ["info@tremblay.ca", "bad"]},
-        },
-    )
-    # Act
-    found = fm.signals(item, EXCLUDED)
-    # Assert
-    assert found.cities == {"quebec", "levis"}
-    assert found.phones == frozenset()
-    assert found.email_domains == {"tremblay.ca"}
-
-
-def test_signals_of_a_record_without_attributes_are_empty():
-    # Arrange
-    item = record(1, "x", attributes=None)
-    # Act
-    found = fm.signals(item, EXCLUDED)
-    # Assert
-    assert not (found.cities or found.phones or found.email_domains)
