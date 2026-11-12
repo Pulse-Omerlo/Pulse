@@ -37,6 +37,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | --- | --- | --- |
 | Claude Code (Anthropic) | AbdelrahmanWM | Writing code and tests from issues, reviewing diffs, drafting PR descriptions and issues |
 | Cursor (agent mode) | mijanullah12 | Designing and writing the file import and its tests from issue #24, the Omerlo deletion handling from issue #119, drafting commit messages and docs |
+| Cursor (agent mode) | hendriktebeng | Implementing automatic org-link recheck (#110) and its tests |
 
 ## Features built with substantial AI help
 
@@ -54,6 +55,9 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | CSV and JSON file import | #24 | |
 | Industry classification of organizations | #149 | |
 | Tenant API for organizations, runs and duplicates | #63 | |
+| Recheck automatic organization links on matching-field change | #110 | |
+| Merging organizations joined by a chain of matches | #108 | |
+| Tier 2 fuzzy matching of organizations | #111 | |
 | Deleted Omerlo records and dropped event sessions | #119 | |
 
 ## Details
@@ -215,7 +219,7 @@ Cursor's agent wrote the deletion signal in the connector (a record that
 answers 404 after being listed is yielded as deleted), the `close_deleted` and
 `close_dropped_children` helpers, the sync run changes that use them in
 incremental runs too, the `event_session` source record kind with its mapper
-and migration 0009, and the mutation step that drops a session. I chose to
+and migration 0011, and the mutation step that drops a session. I chose to
 store sessions as source records, so a dropped session gets a real `removed`
 change, and to leave soft deletes out until #23 has Omerlo's answer.
 
@@ -232,3 +236,139 @@ removed.
 - A 404 on a record's metadata or sessions, after its detail was read, used to
   keep the record with empty metadata, which stored a changed version of a
   record that no longer existed. Any 404 on the record now reports it deleted.
+
+### Recheck automatic organization links (#110)
+
+Cursor wrote the pure matching-field diff and evidence check, the store-time
+service that drops failing automatic `org_link` rows on new versions only, the
+`members_as_of` history helper, and the paired mutation sets used to exercise
+domain, LinkedIn removal and rename. Rematch stays in the existing
+`match_after_sync` path (#109).
+
+**Verification:** unit tests cover field diffs, evidence verdicts and sync
+wiring. Integration tests against Postgres cover drops, empty organizations,
+as-of membership and unchanged old-version links.
+
+### Merging organizations joined by a chain of matches (#108)
+
+Claude Code wrote the union-find clustering, the conflict check that cuts the
+weakest link of a chain, the survivor and display value rules, and the change
+to `match_organizations` that merges organizations and sets `merged_into`. It
+also wrote the `merged_into` migration, the helper that resolves a merged id,
+and the tests. Treating a rejected pair like a conflict, so the rest of the
+chain still links, was its proposal; the PR lists it under decisions to review.
+
+**Verification:** unit tests in `tests/processing/test_clustering.py` run the
+planner on plain data (a three-record chain, two organizations merged, a
+conflicting chain, a parent and subsidiary sharing a LinkedIn URL, a manual
+organization, a rule outside Tier 1). The integration tests merge real
+organizations on Postgres, roll the merge back, rerun it with no changes and
+check tenant isolation. The Tier 1 report gives the same precision and recall
+as before.
+
+**Problem found:** `blocked_matches` sorted matches with
+`RULE_PRIORITIES.index`, which would have raised on any new rule such as the
+planned `fuzzy` one. It now uses the same sort key as the clustering.
+
+**Problems found in review** (the first generated version had all of these):
+- An organization whose members already disagreed (two domains linked by a
+  reviewer, or a member whose domain changed) could never gain a record, so
+  new matches formed a duplicate organization. Only a disagreement that a join
+  adds is now blocked.
+- A record sharing a domain with two subsidiaries on different LinkedIn pages
+  joined whichever had the smaller id. It now joins neither.
+- A removed record that came back after a merge kept a link to the merged
+  organization. Copying a link now follows `merged_into`.
+- The conflict check rescanned every member on each edge, so 800 records on
+  one domain took minutes to plan.
+- A reviewer's organization name was overwritten, and an external id could
+  win the display name vote over real names.
+- Sites on shared hosts (`x.wixsite.com` keeps only `wixsite.com`) chained
+  unrelated organizations; those hosts are now generic domains.
+
+### Tier 2 fuzzy matching of organizations (#111)
+
+Claude Code wrote the fuzzy matching settings and their validation, the
+blocking, scoring and link or review decision in `fuzzy_matching.py`, the
+migration that allows `fuzzy` links, the hard variant in the accuracy report,
+and the hook-up into the #108 planner: a fuzzy edge adds one unlinked record to
+a member that is not tentative, records placed through a fuzzy match stay
+tentative (a marker in the link evidence carries this to the next sync) and
+cannot merge organizations, each record is linked through its strongest kept
+edge, and equally close fuzzy edges into two groups attach the record to
+neither. It also ran the threshold sweep used to pick the default, and the
+near-miss negatives and timings asked for in review.
+
+**Verification:** unit tests cover the settings file, near misses (one letter
+apart in the only distinctive word, different numbers, generic words only),
+the inclusive threshold, each secondary signal and each conflict, the evidence a
+spelling, word order or ending difference needs, blocking, oversized blocks
+(split, then windowed, with comparisons counted) and the evidence of each side.
+Integration tests run `match_organizations` for a link, a review candidate, a
+rejected pair, a record joining an existing organization, two organizations
+that must not be merged, manual links, a new record bridging two organizations
+through a fuzzy member in one sync and over two syncs, Tier 1 records keeping
+Tier 1 links whatever the record ids, and the same records arriving in one or
+two syncs, and run the migration down and up.
+
+**Problems found:**
+- The first scorer compared names with generic words removed. A typo inside a
+  generic word ("pharmacei") then counted as distinctive and hid the match.
+  Each distinctive word now has to be spelled closely somewhere in the other
+  name instead.
+- `token_set_ratio` gives 100 when one name's words are a subset of the other's
+  ("tremblay" and "boulangerie tremblay") and made 4 false links on the hard
+  variant, so the scorer stayed `token_sort_ratio`.
+- The typo helper of the hard variant crashed on names with no long word; a
+  unit test found it.
+- The first migration test left a fuzzy link committed, so the fixture's
+  downgrade to base stopped on it. The downgrade now deletes fuzzy links and
+  the organizations they leave empty, like revisions 0004 and 0007.
+- Team review found that one letter of difference in a surname plus a shared
+  city auto-linked distinct businesses (Martin and Marin), that oversized
+  blocks were dropped without a trace, and that fuzzy candidates outranked
+  Tier 1 ones. Each is fixed and tested; the hard report now adds near-miss
+  negatives so the threshold sweep shows false positives.
+- The first near-miss negatives sometimes reused a name the tenant already
+  had, which Tier 1 then matched. Such names are now skipped.
+- A second review of the planner found that fuzzy edges chained (Marin,
+  Martin, Martine in one organization), that a new record could merge two
+  organizations through a fuzzy-linked member, in one sync or two, that a
+  Tier 1 record could be saved with a fuzzy link when the fuzzy record had the
+  smallest id, and that equal scores were decided by id order. Each has a test.
+
+### Synthetic data pipeline into Omerlo staging (#148)
+
+Claude Code wrote the mixer, the sector-aware generation, the Omerlo sink with
+its tenant guard, retries and report, the three writers (API, external command,
+in-memory fake), the command and the tests. It also looked up the staging ids
+in the CMS and the API, and added the API key's account to the workspace and
+the Employeur block to the Personnes profile type at the author's request.
+
+**Verification:** unit tests with the in-memory writer cover the creation order,
+retries, rejections and the reasons reported, a second run creating nothing,
+records without our external id left alone, the dry run, every guard case and
+an auth error stopping the run. The HTTP writer is tested against mocked routes.
+A test checks that every planned organization name classifies to its planned
+sector, and the default generator output was compared byte for byte before and
+after the refactor. On staging, a 2 organization smoke mix was written, then run
+twice more to check the links and that a rerun creates nothing; then the
+`sector_gaps` mix (134 organizations, 312 people, 312 links) was written with no
+rejection. Reading it back, every record had its external id, every person the
+planned employer, and the sector shares matched the plan.
+
+**Problems found:**
+- Omerlo requires social links without a scheme (`www.linkedin.com/...`) while
+  the generator writes `https://`. The payload builder strips it and refuses
+  any other prefix before sending.
+- The staging tenant allows French only, so a mix sets `locales` and the guard
+  refuses a plan with other locales.
+- The API key's account (a personal one) was not a member of the workspace, so it saw
+  no workspace at all; it is now a member.
+- The first smoke run created its records, then Omerlo refused their metadata:
+  keys must be declared on the profile type first. The keys were added in the
+  CMS, the 4 records tagged by hand, and the run now stops at the first refused
+  metadata instead of leaving more untagged records behind.
+- Staging sends `meta.next` as a path from the host, which the shared
+  pagination helper sent back as a cursor, so every list longer than one page
+  failed with a 500. The helper now follows the path.

@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Protocol
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import logged_run
@@ -18,8 +19,10 @@ from app.ingestion.files.mapping import map_rows
 from app.ingestion.mapped import MappingResult
 from app.ingestion.omerlo.connector import OmerloConnector
 from app.ingestion.omerlo.mapping.batch import map_records
-from app.models import Source, SyncRun
+from app.models import Source, SourceRecord, SyncRun
+from app.processing.entity_resolution import MatchResult, match_organizations
 from app.services.industry import ClassificationReport, classify_organizations
+from app.services.link_recheck import LINK_RECHECK_KEY, RecheckResult, recheck_links
 from app.services.record_changes import record_changes
 from app.services.source_records import (
     close_deleted,
@@ -45,6 +48,8 @@ WorkspaceWatermarks = dict[str, dict[str, datetime]]
 ChangeDetector = Callable[[Session, SyncRun], dict[str, int]]
 # Classifies the tenant's organizations in the caller's transaction after a successful run.
 Classifier = Callable[[Session, uuid.UUID], ClassificationReport]
+# Drops automatic org links whose evidence failed after versioning carried them.
+Rechecker = Callable[[Session, SyncRun, list[tuple[uuid.UUID, uuid.UUID]]], RecheckResult]
 
 
 @dataclass
@@ -111,6 +116,7 @@ def run_sync(
     *,
     full: bool = False,
     detect_changes: ChangeDetector = record_changes,
+    recheck: Rechecker | None = None,
     classify: Classifier | None = None,
     now: Callable[[], datetime] = utc_now,
 ) -> SyncRun:
@@ -141,7 +147,17 @@ def run_sync(
                     archive_records(session, archive, run, archived)
                     # Kept even if storing fails, so the run can be reprocessed from the archive.
                     session.commit()
-                    counts.update(store(session, run, source, fetched, reader, detect_changes))
+                    counts.update(
+                        store(
+                            session,
+                            run,
+                            source,
+                            fetched,
+                            reader,
+                            detect_changes,
+                            recheck or recheck_links,
+                        )
+                    )
                     finish(run, "succeeded", counts, now())
                     session.commit()
                 finally:
@@ -154,10 +170,51 @@ def run_sync(
             finish(run, "failed", failed_counts, now(), error=describe(error))
             session.commit()
         if run.status == "succeeded":
+            match_after_sync(session, run)
             classify_after_sync(session, run, classify or classify_organizations)
         # Loaded while still bound, so callers can read the run after the scope ends.
         session.refresh(run)
         return run
+
+
+def changed_organization_ids(session: Session, run: SyncRun) -> set[uuid.UUID]:
+    """Ids of the current organization versions this run created (new or changed records)."""
+    query = select(SourceRecord.id).where(
+        SourceRecord.tenant_id == run.tenant_id,
+        SourceRecord.first_seen_run == run.id,
+        SourceRecord.kind == "organization",
+        SourceRecord.valid_to.is_(None),
+    )
+    return set(session.scalars(query))
+
+
+def match_after_sync(session: Session, run: SyncRun) -> MatchResult | None:
+    """Match the run's new and changed organizations and save the counts on the run.
+
+    If matching fails, the error is saved on the run and the stored records are kept.
+    """
+    result = None
+    try:
+        changed_ids = changed_organization_ids(session, run)
+        result = match_organizations(session, run.tenant_id, changed_ids)
+        matching_counts = {
+            "organizations_created": result.organizations_created,
+            "organizations_merged": result.organizations_merged,
+            "links_created": result.links_created,
+            "candidates_created": result.candidates_created,
+        }
+        logger.info("organizations matched", extra={"sync_run_id": str(run.id)})
+    except Exception as error:
+        session.rollback()
+        logger.exception("organization matching failed", extra={"sync_run_id": str(run.id)})
+        matching_counts = {"error": describe(error)}
+
+    # Copy the counts into a new dict, otherwise the JSON column is not saved.
+    counts = dict(run.counts or {})
+    counts["matching"] = matching_counts
+    run.counts = counts
+    session.commit()
+    return result
 
 
 def classify_after_sync(session: Session, run: SyncRun, classify: Classifier) -> None:
@@ -214,6 +271,7 @@ def store(
     fetched: Fetched,
     reader: SourceReader,
     detect_changes: ChangeDetector,
+    recheck: Rechecker | None = None,
 ) -> dict[str, int]:
     """Map and store the fetched records as versions and advance the watermarks.
 
@@ -236,6 +294,16 @@ def store(
     )
     if run.mode == "full":
         removed += close_unseen(session, run, keep=failed, kinds=fetched.kinds)
+    rechecked = (recheck or recheck_links)(session, run, upserted.carried)
+    run.counts = {
+        **(run.counts or {}),
+        LINK_RECHECK_KEY: {
+            "checked": rechecked.checked,
+            "kept": rechecked.kept,
+            "dropped": rechecked.dropped,
+            "unverifiable": rechecked.unverifiable,
+        },
+    }
     # Reads the versions this run opened and closed, so it comes after both.
     detect_changes(session, run)
     advance_watermarks(source, fetched)

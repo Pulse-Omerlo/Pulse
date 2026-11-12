@@ -62,14 +62,19 @@ def get_json(
     client: httpx.Client, path: str, params: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     response = client.get(path, params=params)
-    if response.status_code == httpx.codes.UNAUTHORIZED:
-        raise OmerloAuthError(f"{path}: Omerlo rejected the API key (HTTP 401)")
-    if response.status_code == httpx.codes.FORBIDDEN:
-        raise OmerloAuthError(f"{path}: the API key lacks the role for this resource (HTTP 403)")
+    raise_for_auth(response, path)
     if response.status_code == httpx.codes.NOT_FOUND:
         raise OmerloNotFoundError(f"{path}: {error_message(response)}")
     response.raise_for_status()
     return read_json(response, path)
+
+
+def raise_for_auth(response: httpx.Response, path: str) -> None:
+    """Raise `OmerloAuthError` for a rejected key (401) or a missing role (403)."""
+    if response.status_code == httpx.codes.UNAUTHORIZED:
+        raise OmerloAuthError(f"{path}: Omerlo rejected the API key (HTTP 401)")
+    if response.status_code == httpx.codes.FORBIDDEN:
+        raise OmerloAuthError(f"{path}: the API key lacks the role for this resource (HTTP 403)")
 
 
 def read_json(response: httpx.Response, path: str) -> dict[str, Any]:

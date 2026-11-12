@@ -1,0 +1,16 @@
+# Omerlo staging tenant "Projet Pulse". Ids read from the CMS; the API key stays in .env.
+base_url = "https://staging.omerlo.app/api"
+tenant_id = "ef0478ba-a2b0-4e27-81f3-b6b8e77af6cc"
+workspace_id = "b55bd127-7bc5-4f44-a7f1-b1ff2afdcbad"
+locales = ["fr"]
+
+[profile_types]
+organization = "7feaf24e-85dd-4ab4-82bc-321490b92ce9"   # organisation
+person = "ddaf1da5-46c0-43bb-b5eb-7b769a225ae8"         # personne
+
+[statuses]
+draft = "d4cc05b7-5658-4d99-8f3f-faa806d63050"          # Brouillon
+completed = "fc2e9f66-dc80-4b81-a273-ae5c4e602a7e"      # Complété
+
+[blocks]
+employer = "e295ba91-3b56-4eb7-9878-2257eeafd415"       # Employeur: on a person, points to organizations

@@ -120,15 +120,28 @@ A mutation set is data in `mutate.py`: a name, a description and steps.
 
 Fields that can be edited:
 
-- organizations: `name`, `domain` (canonical URL, website and email in every locale), `linkedin`, `crm_id` (metadata), `phone`
+- organizations: `name`, `domain` (canonical URL, website and email in every locale), `linkedin`, `linkedin_removed` (clears LinkedIn in every locale), `crm_id` (metadata), `phone`
 - people: `last_name`, `job_title`, `email`, `linkedin`
 - events: `sessions` (drops one session of an event that has several; the session shows as removed and the event only gets a new `updated_at`)
+
+`Edit(..., paired=True)` limits eligibility to records listed in
+`ground_truth["organization_duplicates"]` or `person_duplicates`, so the edited
+record is one Tier 1 may already have linked. Default `paired=False` keeps the
+`demo` set unchanged.
 
 Records are picked by an RNG seeded with the set and tenant, among records sorted by id that no earlier step touched, so the same set on the same fixtures always gives byte-identical files. Deletes skip records still referenced (project owners, session speakers) and records in a deliberate duplicate pair, so the ground truth stays consistent; it is updated for adds and deletes.
 
 Every added or edited record gets an `updated_at` after every record already in the fixtures (one day after the latest, one minute apart), so an incremental sync sorted by `updated_at-desc` sees it. A metadata change also bumps its record's `updated_at`. Changed records are validated against the schema models.
 
 The `demo` set, in each tenant: adds 2 organizations and 3 people; edits organizations by name, domain, LinkedIn, CRM id, phone and one by name, domain, LinkedIn and CRM id together; edits people by job title, by last name and email, and by LinkedIn; deletes 1 organization, 2 people and 1 event; drops 1 session from another event.
+
+Small recheck sets (one paired edit each):
+
+| Set | Step |
+|-----|------|
+| `recheck_domain` | change domain |
+| `recheck_linkedin` | clear LinkedIn (`linkedin_removed`) |
+| `recheck_rename` | rename |
 
 Each set writes `expected_diff.<set>.json` next to the fixtures:
 
@@ -154,3 +167,101 @@ Each set writes `expected_diff.<set>.json` next to the fixtures:
 The first set applied copies the files to `.original/`; `--reset` restores them, deletes the expected diffs and removes `.original/`. Sets stack (each diff is against the state before it), but one set cannot be applied twice without a reset. `manifest.json` lists the applied sets under `mutations`.
 
 The mock server started with `--fixtures` reloads them when `manifest.json` changes, which `mutate` and `--reset` write last, so a running mock serves the mutated data without a restart.
+
+## Pipeline: mixes and Omerlo staging
+
+`synthetic.pipeline` builds data from a **mix file** and writes it either as fixture files (for the mock server) or into the Omerlo staging workspace. Use it when you need deliberate sector gaps, for example many tech organizations but few tech people.
+
+```bash
+cd backend
+uv run python -m synthetic.pipeline --mix synthetic/mixes/sector_gaps.toml                      # files in synthetic/out/mixes/
+uv run python -m synthetic.pipeline --mix synthetic/mixes/sector_gaps.toml --sink omerlo --dry-run
+uv run python -m synthetic.pipeline --mix synthetic/mixes/sector_gaps.toml --sink omerlo
+```
+
+### Mix files
+
+A mix in `synthetic/mixes/` sets the counts, the share of organizations per NAICS sector, the planted gaps (the share of people in a sector, instead of following the organizations), the duplicate rates and the locales:
+
+```toml
+seed = 490
+organizations = 120
+people = 300
+locales = ["fr"]
+
+[sectors]          # share of organizations, sums to 1
+"54" = 0.25
+"72" = 0.20
+"62" = 0.15
+"81" = 0.40
+
+[gaps]             # share of people
+"54" = 0.03        # 30 organizations, 9 people
+"62" = 0.0         # 18 organizations, nobody
+
+[duplicates]
+organizations = 0.12
+people = 0.04
+```
+
+Organization names come from `SECTOR_PATTERNS` in `vocabulary.py`, so the keyword classifier places each one in its planned sector without a category mapping. Each person works for an organization of their sector. Without a mix, `synthetic.omerlo_fixtures` produces exactly the same files as before.
+
+Every record gets an external id such as `syn-sector-gaps-490-org-0005`, stored in metadata under `pulse_external_id`. The ground truth file adds each organization's sector, each person's employer and the planted gaps.
+
+### Writing to Omerlo staging
+
+`synthetic/targets/omerlo_staging.toml` holds the staging ids (tenant, workspace, profile types, statuses, the Employeur block type). Only `OMERLO_API_KEY` comes from the root `.env`; `OMERLO_BASE_URL` is ignored here, so a run cannot reach production by mistake.
+
+#### One-time setup of a tenant
+
+The staging tenant "Projet Pulse" is already set up. Another tenant needs the same, done by an admin in the Omerlo CMS (Administration):
+
+| Where | What | Why |
+|-------|------|-----|
+| Composer > Workspaces > *workspace* > Members | Add the account that owns the API key: read on every profile type, write on the organization and person types | Without membership the key sees no workspace and gets 403 on blocks |
+| Composer > Profile Types > *person type* > Allowed Block Types | Tick **Employeur** | Otherwise a person cannot hold the link to their employer |
+| Composer > Profile Types > *organization type* > Metadata | Add the keys `pulse_external_id` and `crm_id` | Omerlo refuses any metadata key not declared on the profile type |
+| Composer > Profile Types > *person type* > Metadata | Add the key `pulse_external_id` | Same |
+
+Then put the tenant's ids in a target file (copy `omerlo_staging.toml`) and pass it with `--target`. The Employeur block type id is in the URL of its page under Profile Block Types.
+
+A missing metadata key shows as `400 metadata.key is invalid`. The run stops at the first such refusal, because the record it just created has no external id and a rerun would create it again. Declare the keys, then tag that record (`PUT /community/v2/{organizations|people}/{id}/metadata` with its external id) or delete it, and run again.
+
+#### A run
+
+1. **Guard:** stops before any write unless the host is a test host (never `ca.` or `eu.omerlo.app`), the workspace is visible to the key, the plan's locales are allowed, and no record in the workspace belongs to another tenant.
+2. **Reconcile:** reads the workspace and the metadata of each record. Records with our external id are skipped; records without it are counted as untouched and never changed.
+3. Creates organizations, then people, each followed by its metadata; then links each person to their employer through the Employeur block.
+4. Retries a refused write once, then reports it with Omerlo's reason and moves on. A 401 or 403 stops the run, and so does refused metadata (see above).
+
+Running it twice creates nothing the second time. `--dry-run` does steps 1 and 2 and logs what it would create.
+
+The run logs JSON lines through `app.core.logging`: one `record_rejected` warning per refused record, then `omerlo_run_completed` with the counts (`organizations_created`, `links_rejected`, ...), or `omerlo_run_refused` / `omerlo_run_stopped` at error with the reason.
+
+`--writer api` (default) calls the backoffice API. `--writer cli --cli-command "..."` hands each call to an external command instead (for example a CLI with the Omerlo MCP): the command gets the operation name as its last argument and a JSON object on stdin, and prints `{"result": ...}` or `{"error": "...", "status": 400}`.
+
+Exit codes: 0 when everything was written or skipped, 1 when some records were rejected, 2 when the mix or the guard refused the run, 3 when the key was refused, 4 when the run stopped after refused metadata.
+
+#### What staging does that the documentation does not say
+
+Found while writing the first runs (November 2026):
+
+- **Metadata keys** must be declared on the profile type, as above.
+- **Validation errors** come back as `{"status": 400, "errors": {"metadata": [{"key": ["is invalid"]}]}}`, not as the documented `{"error": "..."}`. The writer flattens them to `metadata.key is invalid`.
+- **Pagination:** lists return 25 items by default. `meta.next` is a path from the host, `/api/community/v2/...?after=<cursor>&limit=...&sort_by=...`, that already carries the request's parameters; `app/ingestion/omerlo/pagination.py` follows it as is.
+- **Social links** are stored without a scheme (`www.linkedin.com/...`); the payload builder strips `https://`.
+- **A `{"data": [...]}` body on the metadata PUT** answers 200 and saves nothing: the body is the bare list of entries.
+
+## Viewer
+
+A local page to look at what a pipeline run produced: each sector's share of organizations and people side by side, with the planted gaps marked; the organizations and people of a sector; the planted duplicate pairs; and a check of the data against the run's plan.
+
+```bash
+cd backend
+uv run python -m synthetic.viewer --fixtures synthetic/out/mixes/mix-sector-gaps        # files from --sink files
+uv run python -m synthetic.viewer --omerlo --mix synthetic/mixes/sector_gaps.toml         # the Omerlo test tenant
+```
+
+Then open http://127.0.0.1:8200. The page only calls the viewer's own GET endpoints (`/api/summary`, `/api/sectors`, `/api/organizations?sector=`, `/api/people?sector=&employer=`, `/api/duplicates`, `/api/check`); the server binds to 127.0.0.1 only. **Sync** reads the data again, so a new run shows up without a restart; the page keeps the last data if a sync fails and shows why.
+
+With `--omerlo`, the viewer applies the pipeline's tenant guard, reads the workspace through the API key in `.env` (the key never reaches the browser), and keeps only records whose external id belongs to the mix. It reads each person's Employeur block, so the check shows people with no employer or the wrong one. Reading takes about three calls per person, so a full mix takes a minute or two. The page opens right away and fills in when the first read is done; each read is saved in `synthetic/out/viewer/` (one file per workspace and mix), so the next start shows the saved copy at once and **Sync** reads the tenant again. Without `--mix` there is no plan, so the gaps and the check are left out.

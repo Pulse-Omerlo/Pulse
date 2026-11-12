@@ -93,6 +93,8 @@ class OrgEntity:
     domain: str | None
     linkedin: str | None
     crm_id: str | None
+    # NAICS sector code the name was built for; None when names are not sector-aware.
+    sector: str | None = None
 
 
 @dataclass
@@ -259,30 +261,33 @@ class OmerloFixtureGenerator:
             city, region = self.rng.choice(vocab.CITIES)
             pattern = self.rng.choice(vocab.ORG_PATTERNS)
             base = pattern.format(s=surname, s2=surname2, c=city)
-            institution = base.startswith(vocab.INSTITUTION_PREFIXES)
             if base in names:
                 continue
             names.add(base)
-            slug = slugify(base)
-            entities.append(
-                OrgEntity(
-                    key=len(entities),
-                    base_name=base,
-                    suffix="" if institution else self.rng.choice(vocab.LEGAL_SUFFIXES),
-                    city=city,
-                    region=region,
-                    domain=None
-                    if self.rng.random() < 0.1
-                    else slug + self.rng.choice(vocab.TOP_LEVEL_DOMAINS),
-                    linkedin=f"https://www.linkedin.com/company/{slug}"
-                    if self.rng.random() < 0.6
-                    else None,
-                    crm_id=f"CRM-{self.rng.randint(10000, 99999)}"
-                    if self.rng.random() < 0.5
-                    else None,
-                )
-            )
+            entities.append(self.org_entity(len(entities), base, city, region))
         return entities
+
+    def org_entity(
+        self, key: int, base: str, city: str, region: str, sector: str | None = None
+    ) -> OrgEntity:
+        """The identifiers of one organization, drawn in a fixed order so a seed stays stable."""
+        institution = base.startswith(vocab.INSTITUTION_PREFIXES)
+        slug = slugify(base)
+        return OrgEntity(
+            key=key,
+            base_name=base,
+            suffix="" if institution else self.rng.choice(vocab.LEGAL_SUFFIXES),
+            city=city,
+            region=region,
+            domain=None
+            if self.rng.random() < 0.1
+            else slug + self.rng.choice(vocab.TOP_LEVEL_DOMAINS),
+            linkedin=f"https://www.linkedin.com/company/{slug}"
+            if self.rng.random() < 0.6
+            else None,
+            crm_id=f"CRM-{self.rng.randint(10000, 99999)}" if self.rng.random() < 0.5 else None,
+            sector=sector,
+        )
 
     # --------------------------------------------------------------- resources
 

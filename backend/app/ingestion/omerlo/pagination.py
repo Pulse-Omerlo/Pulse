@@ -2,9 +2,10 @@
 """Pagination for the Omerlo backoffice API.
 
 List endpoints answer with `{"data": [...], "meta": {"base", "next", "previous"}}`,
-and `meta.next` is null on the last page. What `next` holds is not documented
-(#23): an absolute URL is followed as is, anything else is sent back as the
-`after` cursor, the parameter the workspaces and categories lists document.
+and `meta.next` is null on the last page. Staging sends `next` as a path from the
+host that already carries the cursor and the request's own parameters; it is
+followed as is, like an absolute URL on the same host. Anything else is sent back
+as the `after` cursor, the parameter the workspaces and categories lists document.
 """
 
 from collections.abc import Iterator
@@ -46,6 +47,10 @@ def paginate(
         if next_page in seen:
             raise OmerloAPIError(f"{path}: next page {next_page!r} returned twice")
         seen.add(next_page)
+        if next_page.startswith("/"):
+            # Staging sends a path from the host, with the query of the next page:
+            # /api/community/v2/.../organizations?after=...&limit=...&sort_by=...
+            next_page = str(client.base_url.join(next_page))
         if next_page.startswith(("http://", "https://")):
             # The API key goes with the request, so only follow links to the same API.
             if httpx.URL(next_page).host != client.base_url.host:

@@ -110,8 +110,8 @@ def list_organizations(
 def organization_detail(tenant_id: uuid.UUID, organization_id: uuid.UUID, db: TenantDb):
     """An organization with its current records, how each was linked, and their versions."""
     organization = views.get_organization(db, tenant_id, organization_id)
-    records = views.linked_records(db, tenant_id, [organization_id])
-    return organization_out(organization, records[organization_id])
+    records = views.linked_records(db, tenant_id, [organization.id])
+    return organization_out(organization, records[organization.id])
 
 
 @router.get(
@@ -122,8 +122,8 @@ def organization_timeline(
     tenant_id: uuid.UUID, organization_id: uuid.UUID, db: TenantDb, paging: PageParams
 ):
     """Changes to the organization's records found by sync runs, newest first."""
-    views.get_organization(db, tenant_id, organization_id)
-    rows, total = views.organization_timeline(db, tenant_id, organization_id, paging)
+    organization = views.get_organization(db, tenant_id, organization_id)
+    rows, total = views.organization_timeline(db, tenant_id, organization.id, paging)
     return Page(
         items=[
             TimelineEntryOut(
