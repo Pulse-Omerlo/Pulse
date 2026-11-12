@@ -217,9 +217,25 @@ def test_person_keeps_only_the_minimal_fields():
         "job_titles": {"fr": "Directrice générale", "en": "General Manager"},
         "identifiers": {
             "emails": ["marie-eve@boulangeriestroch.ca"],
+            "phones": ["+14185550199"],
             "linkedin": ["in/marie-eve-tremblay"],
         },
     }
+
+
+def test_person_stores_normalized_phones_in_identifiers():
+    # Arrange
+    payload = payloads.person()
+    payload["contact"] = [
+        payloads.contact("en", phone="+1 (514) 555-0100", email="a@example.com"),
+        payloads.contact("fr", phone="514-555-0100"),
+    ]
+
+    # Act
+    record = map_record("person", payload)
+
+    # Assert
+    assert record.attributes["identifiers"]["phones"] == ["+15145550100"]
 
 
 def test_person_with_only_one_name_part_is_mapped():
@@ -305,6 +321,35 @@ def test_named_profile_without_locales_has_no_name():
 
     # Assert
     assert record.name_normalized is None
+
+
+# -------------------------------------------------------------- event session
+
+
+def test_event_session_keeps_its_event_and_takes_its_title_as_name():
+    # Arrange
+    payload = payloads.event_session()
+
+    # Act
+    record = map_record("event_session", payload)
+
+    # Assert
+    assert record.kind == "event_session"
+    assert record.external_id == "session-1"
+    assert record.workspace_id is None
+    assert record.name_normalized == "conference d ouverture"
+    assert record.attributes["event_id"] == "event-1"
+    assert record.attributes["session_speakers"] == payload["session_speakers"]
+
+
+@pytest.mark.parametrize("event_id", [None, ""])
+def test_event_session_without_its_event_fails(event_id):
+    # Arrange
+    payload = payloads.event_session() | {"event_id": event_id}
+
+    # Act / Assert
+    with pytest.raises(MappingError, match="no event_id"):
+        map_record("event_session", payload)
 
 
 # -------------------------------------------------------------------- content

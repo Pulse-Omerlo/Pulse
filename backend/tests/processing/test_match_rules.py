@@ -13,7 +13,8 @@ def edge(rule, left=LEFT, right=RIGHT):
 
 def test_only_weak_rules_are_not_strong():
     # Act / Assert
-    assert [edge(rule).strong for rule in ("name_only", "domain", "fuzzy")] == [False, True, True]
+    rules = ("name_only", "fuzzy_name", "domain", "fuzzy")
+    assert [edge(rule).strong for rule in rules] == [False, False, True, True]
 
 
 def test_unknown_rules_sort_after_tier1_by_weight(monkeypatch):
@@ -45,4 +46,71 @@ def test_only_identifier_rules_can_merge_organizations():
     ]
     # Assert
     assert allowed == ["domain", "linkedin", "external_id"]
-    assert match_rules.rule_weight("fuzzy") == 0.0
+    assert match_rules.rule_weight("unknown") == 0.0
+
+
+def fuzzy(score, left=LEFT, right=RIGHT, rule="fuzzy"):
+    return MatchCandidateData(left, right, rule, (), score)
+
+
+def test_more_similar_fuzzy_edges_sort_first():
+    # Arrange
+    edges = [fuzzy(0.88, UUID(int=1), UUID(int=2)), fuzzy(0.95, UUID(int=3), UUID(int=4))]
+    # Act
+    ordered = sorted([*edges, edge("name_city")], key=match_rules.strength_key)
+    # Assert
+    assert [item.score for item in ordered] == [None, 0.95, 0.88]
+
+
+def test_fuzzy_link_confidence_stays_below_every_tier1_rule():
+    # Arrange
+    tier1 = [match_rules.RULE_WEIGHTS[rule] for rule in match_rules.TIER1_RULES]
+    # Act
+    perfect = match_rules.link_confidence(fuzzy(1.0))
+    usual = match_rules.link_confidence(fuzzy(0.875))
+    # Assert
+    assert perfect < min(tier1)
+    assert usual == round(0.9 * 0.875, 3)
+    assert match_rules.link_confidence(edge("domain")) == 1.0
+
+
+def test_candidate_score_is_the_rule_weight_scaled_by_the_similarity():
+    # Act / Assert
+    assert match_rules.candidate_score(fuzzy(0.91, rule="fuzzy_name")) == 0.455
+    assert match_rules.candidate_score(fuzzy(0.91)) == 0.819
+    assert match_rules.candidate_score(edge("name_only")) == 0.5
+
+
+def test_candidates_rank_tier1_rules_above_fuzzy_ones():
+    # Arrange
+    # Equal names are Tier 1 rules, so a fuzzy similarity stays below 1.
+    items = [
+        fuzzy(0.99, rule="fuzzy_name"),
+        edge("name_only"),
+        fuzzy(1.0),
+        edge("name_city"),
+    ]
+    # Act
+    ranked = sorted(items, key=match_rules.candidate_score, reverse=True)
+    # Assert
+    assert [item.rule for item in ranked] == ["name_city", "fuzzy", "name_only", "fuzzy_name"]
+
+
+def test_decisions_name_their_tier_and_rule_version():
+    # Act / Assert
+    assert match_rules.decided_by(fuzzy(0.9)) == "tier2:tier2-v1"
+    assert match_rules.decided_by(edge("domain")) == "tier1:tier1-v1"
+    assert match_rules.rule_set_version("fuzzy_name") == "tier2-v1"
+    assert match_rules.rule_set_version("name_city") == "tier1-v1"
+
+
+def test_scores_that_round_alike_still_sort_apart():
+    # Arrange
+    # 0.9 x 0.8755 and 0.9 x 0.8754 both round to 0.788.
+    lower = fuzzy(0.8754, UUID(int=1), UUID(int=2))
+    higher = fuzzy(0.8755, UUID(int=3), UUID(int=4))
+    # Act
+    ordered = sorted([lower, higher], key=match_rules.strength_key)
+    # Assert
+    assert match_rules.link_confidence(lower) == match_rules.link_confidence(higher)
+    assert ordered == [higher, lower]

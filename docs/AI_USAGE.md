@@ -36,8 +36,8 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Tool | Used by | Used for |
 | --- | --- | --- |
 | Claude Code (Anthropic) | AbdelrahmanWM | Writing code and tests from issues, reviewing diffs, drafting PR descriptions and issues |
-| Cursor (agent mode) | mijanullah12 | Designing and writing the file import and its tests from issue #24, drafting commit messages and docs |
-| Cursor (agent mode) | hendriktebeng | Implementing automatic org-link recheck (#110) and its tests |
+| Cursor (agent mode) | mijanullah12 | Designing and writing the file import and its tests from issue #24, the Omerlo deletion handling from issue #119, drafting commit messages and docs |
+| Cursor (agent mode) | hendriktebeng | Implementing automatic org-link recheck (#110) and people matching (#112) |
 
 ## Features built with substantial AI help
 
@@ -58,6 +58,9 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Sector mix and gaps | #150 | |
 | Recheck automatic organization links on matching-field change | #110 | |
 | Merging organizations joined by a chain of matches | #108 | |
+| Tier 2 fuzzy matching of organizations | #111 | |
+| Deleted Omerlo records and dropped event sessions | #119 | |
+| Match people with name plus a secondary identifier | #112 | |
 
 ## Details
 
@@ -229,6 +232,30 @@ the stored organizations and classifications.
 computed, which is the same for every row written in one transaction. It is
 now chosen by the start of its sync run.
 
+### Deleted Omerlo records and dropped event sessions (#119)
+
+Cursor's agent wrote the deletion signal in the connector (a record that
+answers 404 after being listed is yielded as deleted), the `close_deleted` and
+`close_dropped_children` helpers, the sync run changes that use them in
+incremental runs too, the `event_session` source record kind with its mapper
+and migration 0011, and the mutation step that drops a session. I chose to
+store sessions as source records, so a dropped session gets a real `removed`
+change, and to leave soft deletes out until #23 has Omerlo's answer.
+
+**Verification:** unit tests cover each 404 path in the connector and how the
+sync run passes deleted records and read events to the helpers. The
+integration tests run on Postgres against the mock server: an organization and
+an event that answer 404 after being listed, in incremental and full runs, and
+the demo mutation's dropped session, which an incremental sync now records as
+removed.
+
+**Problems found during the design:**
+- Event sessions were archived but never stored as source records, so a
+  session dropped from an event could not produce a `removed` change at all.
+- A 404 on a record's metadata or sessions, after its detail was read, used to
+  keep the record with empty metadata, which stored a changed version of a
+  record that no longer existed. Any 404 on the record now reports it deleted.
+
 ### Recheck automatic organization links (#110)
 
 Cursor wrote the pure matching-field diff and evidence check, the store-time
@@ -277,3 +304,104 @@ planned `fuzzy` one. It now uses the same sort key as the clustering.
   win the display name vote over real names.
 - Sites on shared hosts (`x.wixsite.com` keeps only `wixsite.com`) chained
   unrelated organizations; those hosts are now generic domains.
+
+### Tier 2 fuzzy matching of organizations (#111)
+
+Claude Code wrote the fuzzy matching settings and their validation, the
+blocking, scoring and link or review decision in `fuzzy_matching.py`, the
+migration that allows `fuzzy` links, the hard variant in the accuracy report,
+and the hook-up into the #108 planner: a fuzzy edge adds one unlinked record to
+a member that is not tentative, records placed through a fuzzy match stay
+tentative (a marker in the link evidence carries this to the next sync) and
+cannot merge organizations, each record is linked through its strongest kept
+edge, and equally close fuzzy edges into two groups attach the record to
+neither. It also ran the threshold sweep used to pick the default, and the
+near-miss negatives and timings asked for in review.
+
+**Verification:** unit tests cover the settings file, near misses (one letter
+apart in the only distinctive word, different numbers, generic words only),
+the inclusive threshold, each secondary signal and each conflict, the evidence a
+spelling, word order or ending difference needs, blocking, oversized blocks
+(split, then windowed, with comparisons counted) and the evidence of each side.
+Integration tests run `match_organizations` for a link, a review candidate, a
+rejected pair, a record joining an existing organization, two organizations
+that must not be merged, manual links, a new record bridging two organizations
+through a fuzzy member in one sync and over two syncs, Tier 1 records keeping
+Tier 1 links whatever the record ids, and the same records arriving in one or
+two syncs, and run the migration down and up.
+
+**Problems found:**
+- The first scorer compared names with generic words removed. A typo inside a
+  generic word ("pharmacei") then counted as distinctive and hid the match.
+  Each distinctive word now has to be spelled closely somewhere in the other
+  name instead.
+- `token_set_ratio` gives 100 when one name's words are a subset of the other's
+  ("tremblay" and "boulangerie tremblay") and made 4 false links on the hard
+  variant, so the scorer stayed `token_sort_ratio`.
+- The typo helper of the hard variant crashed on names with no long word; a
+  unit test found it.
+- The first migration test left a fuzzy link committed, so the fixture's
+  downgrade to base stopped on it. The downgrade now deletes fuzzy links and
+  the organizations they leave empty, like revisions 0004 and 0007.
+- Team review found that one letter of difference in a surname plus a shared
+  city auto-linked distinct businesses (Martin and Marin), that oversized
+  blocks were dropped without a trace, and that fuzzy candidates outranked
+  Tier 1 ones. Each is fixed and tested; the hard report now adds near-miss
+  negatives so the threshold sweep shows false positives.
+- The first near-miss negatives sometimes reused a name the tenant already
+  had, which Tier 1 then matched. Such names are now skipped.
+- A second review of the planner found that fuzzy edges chained (Marin,
+  Martin, Martine in one organization), that a new record could merge two
+  organizations through a fuzzy-linked member, in one sync or two, that a
+  Tier 1 record could be saved with a fuzzy link when the fuzzy record had the
+  smallest id, and that equal scores were decided by id order. Each has a test.
+
+### Synthetic data pipeline into Omerlo staging (#148)
+
+Claude Code wrote the mixer, the sector-aware generation, the Omerlo sink with
+its tenant guard, retries and report, the three writers (API, external command,
+in-memory fake), the command and the tests. It also looked up the staging ids
+in the CMS and the API, and added the API key's account to the workspace and
+the Employeur block to the Personnes profile type at the author's request.
+
+**Verification:** unit tests with the in-memory writer cover the creation order,
+retries, rejections and the reasons reported, a second run creating nothing,
+records without our external id left alone, the dry run, every guard case and
+an auth error stopping the run. The HTTP writer is tested against mocked routes.
+A test checks that every planned organization name classifies to its planned
+sector, and the default generator output was compared byte for byte before and
+after the refactor. On staging, a 2 organization smoke mix was written, then run
+twice more to check the links and that a rerun creates nothing; then the
+`sector_gaps` mix (134 organizations, 312 people, 312 links) was written with no
+rejection. Reading it back, every record had its external id, every person the
+planned employer, and the sector shares matched the plan.
+
+**Problems found:**
+- Omerlo requires social links without a scheme (`www.linkedin.com/...`) while
+  the generator writes `https://`. The payload builder strips it and refuses
+  any other prefix before sending.
+- The staging tenant allows French only, so a mix sets `locales` and the guard
+  refuses a plan with other locales.
+- The API key's account (a personal one) was not a member of the workspace, so it saw
+  no workspace at all; it is now a member.
+- The first smoke run created its records, then Omerlo refused their metadata:
+  keys must be declared on the profile type first. The keys were added in the
+  CMS, the 4 records tagged by hand, and the run now stops at the first refused
+  metadata instead of leaving more untagged records behind.
+- Staging sends `meta.next` as a path from the host, which the shared
+  pagination helper sent back as a cursor, so every list longer than one page
+  failed with a 500. The helper now follows the path.
+
+### Match people with name plus a secondary identifier (#112)
+
+Cursor wrote the `person` / `person_link` tables, Tier 1 people matching (name
+plus email, phone, person LinkedIn, or file-import organization id), kind-
+dispatched automatic-link recheck for people, post-sync people matching in a
+separate try from organizations, and separate people scoring in the Tier 1
+accuracy report. Profiles-block and event-speaker shared-organization signals
+are waived for this PR.
+
+**Verification:** unit tests cover classify rules, conflicts, rejected blocks,
+sync wiring and person recheck fields. Integration tests (when
+`TEST_DATABASE_URL` is set) cover people links, copy-on-version and isolation
+graph coverage.

@@ -1,5 +1,5 @@
 # AI contribution: 50% or more AI-generated
-"""Tests for the Tier 1 accuracy scoring and report."""
+"""Tests for the accuracy scoring and report."""
 
 import json
 from uuid import UUID
@@ -34,9 +34,23 @@ def test_expected_pairs_come_from_organization_duplicates():
     assert pairs == {("a", "b"), ("c", "d")}
 
 
+def test_expected_pairs_can_read_person_duplicates():
+    # Arrange
+    ground_truth = {
+        "organization_duplicates": [
+            {"entity": 1, "record_ids": ["a", "b"], "changes": []},
+        ],
+        "person_duplicates": [{"person": 5, "record_ids": ["p2", "p1"], "changes": []}],
+    }
+
+    # Act / Assert
+    assert expected_pairs(ground_truth, key="person_duplicates") == {("p1", "p2")}
+
+
 def test_expected_pairs_is_empty_without_duplicates():
     # Act / Assert
     assert expected_pairs({}) == set()
+    assert expected_pairs({}, key="person_duplicates") == set()
 
 
 def test_predicted_pairs_lists_every_pair_in_a_group():
@@ -110,8 +124,55 @@ def test_report_logs_the_dev_only_notice_and_each_tenant(capsys):
     # Assert
     assert events[0]["event"] == "tier1_report_started"
     assert events[0]["notice"] == tier1_report.HEADER
-    tenants = [event["tenant"] for event in events if event["event"] == "tier1_score"]
-    assert tenants == ["demo-capitale", "demo-estrie", "all"]
+    org_scores = [
+        event
+        for event in events
+        if event["event"] == "tier1_score" and event.get("kind") == "organization"
+    ]
+    assert [event["tenant"] for event in org_scores] == ["demo-capitale", "demo-estrie", "all"]
+    both = [event for event in events if event["event"] == "tier2_score"]
+    assert [event["tenant"] for event in both] == [event["tenant"] for event in org_scores]
+    assert {"linked", "review"} <= both[-1].keys()
+    people_scores = [
+        event
+        for event in events
+        if event["event"] == "tier1_score" and event.get("kind") == "person"
+    ]
+    assert [event["tenant"] for event in people_scores] == [
+        "demo-capitale",
+        "demo-estrie",
+        "all",
+    ]
+
+
+def test_hard_variant_shows_what_tier2_adds(capsys):
+    # Act
+    tier1_report.main(["--hard"])
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    # Assert
+    totals = {
+        e["event"]: e
+        for e in events
+        if e.get("tenant") == "all" and e.get("kind") == "organization"
+    }
+    assert events[0]["variant"] == "hard"
+    assert totals["tier1_score"]["recall"] == 0.0
+    assert totals["tier2_score"]["recall"] > 0.5
+    # The near-miss negatives add no false positive.
+    assert totals["tier2_score"]["precision"] == 1.0
+    assert totals["tier2_score"]["linked"] > 0 and totals["tier2_score"]["review"] > 0
+    names = {e["event"] for e in events}
+    # Tier 1 misses every hard duplicate, and the report lists each of them.
+    assert {"tier1_false_negative", "tier2_false_negative"} <= names
+
+
+def test_sweep_scores_each_threshold(capsys):
+    # Act
+    tier1_report.main(["--sweep"])
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    # Assert
+    thresholds = [e["threshold"] for e in events if e["event"] == "tier2_threshold"]
+    assert thresholds == list(tier1_report.SWEEP_THRESHOLDS)
 
 
 def test_report_logs_each_wrong_pair_as_a_warning(capsys):
@@ -120,11 +181,14 @@ def test_report_logs_each_wrong_pair_as_a_warning(capsys):
     result = score({("a", "b")}, {("c", "d")})
     # Act
     tier1_report.log_wrong_pairs("demo-capitale", result)
+    tier1_report.log_wrong_pairs("demo-capitale", result, "tier2")
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     # Assert
     assert [event["event"] for event in events] == [
         "tier1_false_positive",
         "tier1_false_negative",
+        "tier2_false_positive",
+        "tier2_false_negative",
     ]
     assert events[0]["level"] == "warning"
     assert (events[0]["left"], events[0]["right"]) == ("c", "d")

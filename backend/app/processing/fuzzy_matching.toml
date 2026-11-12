@@ -1,0 +1,47 @@
+# AI contribution: 50% or more AI-generated
+# Tier 2 fuzzy name matching of organizations (app/processing/fuzzy_config.py reads this).
+# A score is 0 to 1 on normalized names; pairs at or above the threshold are proposed.
+# Measured on the synthetic ground truth with `uv run python -m app.tier1_report --sweep`.
+threshold = 0.87
+
+# Blocking: only records sharing a block are compared.
+# Name tokens shorter than this never form a block.
+min_token_length = 3
+# Tokens form blocks by their first letters, so a typo after them still shares a block.
+prefix_length = 4
+# A token in more than this share of the tenant's records (and in more than
+# min_common_count records) is too common to block on.
+max_token_share = 0.1
+min_common_count = 10
+# A block with more records than this is split by city and word prefix. A split block
+# still over it compares each record with the next window_size records in name order,
+# so a common key cannot make the work quadratic in the tenant size.
+max_block_size = 50
+window_size = 10
+# Only the first words of a name are compared word by word, so a very long name cannot
+# make one comparison slow.
+max_name_words = 12
+
+# Words that describe what an organization does rather than which one it is. They never
+# form a block, and the rest of the name must also be similar for a pair to match, so
+# "Restaurant Chez Marie" and "Restaurant Chez Mario" stay apart. Entries are normalized
+# like the names (accents folded, lowercase, "et" read as "and"), so write them as usual.
+# "Canada" is generic: it appears in many unrelated names. City names such as Québec and
+# Montréal stay distinctive: in "Chambre de commerce de Québec" the city is the only word
+# that tells the organization apart.
+generic_tokens = [
+  "and", "de", "des", "du", "la", "le", "les", "l", "d", "a", "au", "aux", "en", "et",
+  "the", "of", "for",
+  "chez", "fils", "frères", "associés", "partenaires",
+  "groupe", "group", "compagnie", "entreprise", "entreprises", "société",
+  "services", "service", "solutions", "consultants", "consulting", "conseil", "conseils",
+  "boulangerie", "boulangeries", "pâtisserie", "pâtisseries", "restaurant", "restaurants",
+  "resto", "café", "bistro", "bar", "brasserie", "microbrasserie", "épicerie", "épiceries",
+  "marché", "dépanneur", "quincaillerie", "pharmacie", "pharmacies", "clinique",
+  "cliniques", "dentaire", "médicale", "garage", "garages", "construction", "constructions",
+  "rénovation", "rénovations", "plomberie", "coiffure", "transport", "transports",
+  "imprimerie", "cabinet", "avocats", "notaires", "comptables", "technologies",
+  "technologie", "tech", "informatique", "média", "médias", "coopérative", "centre",
+  "center", "culturel", "chambre", "commerce", "festival", "fondation", "foundation",
+  "association", "club", "institut", "école", "résidence", "résidences", "canada",
+]

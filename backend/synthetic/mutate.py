@@ -95,7 +95,7 @@ DEMO = MutationSet(
     name="demo",
     description=(
         "Second sync of the demo: new organizations and people, edits to names and "
-        "identifiers used for matching, and deleted records."
+        "identifiers used for matching, deleted records, and a session dropped from an event."
     ),
     steps=(
         Add("organizations", 2),
@@ -112,6 +112,7 @@ DEMO = MutationSet(
         Delete("organizations"),
         Delete("people", 2),
         Delete("events"),
+        Edit("events", ("sessions",)),
     ),
 )
 
@@ -373,6 +374,14 @@ class TenantMutator:
     def change_person_linkedin(self, record: dict[str, Any]) -> None:
         self.set_linkedin(record, "in", person_slug(record))
 
+    def sessions_of(self, event: dict[str, Any]) -> list[dict[str, Any]]:
+        return [s for s in self.res["event_sessions"] if s["event_id"] == event["id"]]
+
+    def drop_session(self, event: dict[str, Any]) -> None:
+        """Remove one of the event's sessions; the API lists only the sessions left."""
+        gone = self.rng.choice(sorted(s["id"] for s in self.sessions_of(event)))
+        self.res["event_sessions"] = [s for s in self.res["event_sessions"] if s["id"] != gone]
+
     # --------------------------------------------------------------- deleting
 
     def delete(self, step: Delete) -> None:
@@ -431,6 +440,10 @@ EDITS: dict[str, dict[str, tuple[Callable, Callable]]] = {
         ),
         "email": (has_contact("email"), TenantMutator.change_email),
         "linkedin": (has_contact("linkedin"), TenantMutator.change_person_linkedin),
+    },
+    "events": {
+        # Keeps at least one session, so the event still has some to compare against.
+        "sessions": (lambda m, r: len(m.sessions_of(r)) > 1, TenantMutator.drop_session),
     },
 }
 

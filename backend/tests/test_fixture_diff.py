@@ -32,7 +32,7 @@ from tests.synthetic.conftest import SMALL
         ("person", "locales[en].job_title", {"attributes.job_titles.en"}),
         ("person", "contact[fr].email", {"attributes.identifiers.emails"}),
         ("person", "contact[fr].linkedin", {"attributes.identifiers.linkedin", "linkedin"}),
-        ("person", "contact[fr].phone", set()),
+        ("person", "contact[fr].phone", {"attributes.identifiers.phones"}),
     ],
 )
 def test_fixture_paths_translate_to_normalized_paths(kind, path, paths):
@@ -86,7 +86,7 @@ def test_only_kinds_stored_as_source_records_are_expected():
     # Assert
     assert result.added == {("person", "p-1")}
     assert result.modified == {("organization", "o-1"): []}
-    assert result.removed == {("event", "e-1")}
+    assert result.removed == {("event", "e-1"), ("event_session", "s-1")}
 
 
 def test_mapped_records_can_be_limited_to_recent_updates():
@@ -100,7 +100,7 @@ def test_mapped_records_can_be_limited_to_recent_updates():
 
     # Assert
     kinds = {record.kind for record in everything}
-    assert kinds == {"organization", "person", "project", "event"}
+    assert kinds == {"organization", "person", "project", "event", "event_session"}
     assert len(recent) < len(everything)
     assert all(record.external_id for record in recent)
 

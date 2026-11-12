@@ -79,6 +79,30 @@ ORG_PATTERNS = [
     "Microbrasserie {s}",
 ]
 
+# Name patterns by NAICS sector, for mixes that plan organizations per sector. Each one
+# carries a word from app/processing/industry_keywords.toml for its sector and none for
+# another, so keyword classification places it without a category mapping.
+SECTOR_PATTERNS = {
+    "11": ["Ferme {s}", "Érablière {s}", "Ferme {s} et fils"],
+    "23": ["Construction {s}", "Toiture {s}", "Plomberie {s}", "Excavation {s} et fils"],
+    "31-33": ["Imprimerie {s}", "Fabrication {s}", "Fonderie {s}"],
+    "44-45": ["Quincaillerie {s}", "Librairie {s}", "Épicerie {s}", "Fleuriste {s}"],
+    "48-49": ["Transport {s}", "Camionnage {s}", "Déménagement {s}"],
+    "51": ["Logiciels {s}", "Radio {c}", "Éditions {s}"],
+    "52": ["Assurances {s}", "Placements {s}", "Groupe financier {s}"],
+    "54": [
+        "{s} & {s2} Avocats",
+        "Cabinet comptable {s}",
+        "Génie conseil {s}",
+        "{s} Informatique",
+        "Architecture {s} {s2}",
+    ],
+    "62": ["Clinique dentaire {s}", "Physiothérapie {s}", "Clinique médicale {s}"],
+    "71": ["Festival d'été de {c}", "Théâtre de {c}", "Musée de {c}", "Golf {s}"],
+    "72": ["Restaurant Chez {s}", "Auberge {s}", "Bistro {s}", "Traiteur {s}"],
+    "81": ["Garage {s} et fils", "Coiffure {s}", "Chambre de commerce de {c}", "Fondation {s}"],
+}
+
 # Organizations starting with these are institutions and carry no legal suffix.
 INSTITUTION_PREFIXES = (
     "Coopérative",

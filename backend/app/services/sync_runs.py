@@ -21,11 +21,17 @@ from app.ingestion.omerlo.connector import OmerloConnector
 from app.ingestion.omerlo.mapping.batch import map_records
 from app.models import SectorMixResult, Source, SourceRecord, SyncRun
 from app.processing.entity_resolution import MatchResult, match_organizations
+from app.processing.person_resolution import match_people
 from app.services.industry import ClassificationReport, classify_organizations
 from app.services.link_recheck import LINK_RECHECK_KEY, RecheckResult, recheck_links
 from app.services.record_changes import record_changes
 from app.services.sector_mix import measure_sector_mix
-from app.services.source_records import close_unseen, upsert_records
+from app.services.source_records import (
+    close_deleted,
+    close_dropped_children,
+    close_unseen,
+    upsert_records,
+)
 from app.storage.archive import PayloadArchive
 from app.storage.raw_records import archive_records
 
@@ -60,6 +66,11 @@ class Fetched:
     kinds: tuple[str, ...] | None = None
     # Archived with the run but neither counted nor mapped, e.g. an imported file.
     archive_only: list[RawRecord] = field(default_factory=list)
+    # Records the source reported deleted; their current versions are closed as removed.
+    deleted: list[RawRecord] = field(default_factory=list)
+    # Events whose whole session list was read, or that were deleted; their sessions
+    # missing from this run are removed.
+    session_events: set[str] = field(default_factory=set)
 
 
 class SourceReader(Protocol):
@@ -177,19 +188,29 @@ def run_sync(
 
 def changed_organization_ids(session: Session, run: SyncRun) -> set[uuid.UUID]:
     """Ids of the current organization versions this run created (new or changed records)."""
+    return changed_record_ids(session, run, "organization")
+
+
+def changed_person_ids(session: Session, run: SyncRun) -> set[uuid.UUID]:
+    """Ids of the current person versions this run created (new or changed records)."""
+    return changed_record_ids(session, run, "person")
+
+
+def changed_record_ids(session: Session, run: SyncRun, kind: str) -> set[uuid.UUID]:
     query = select(SourceRecord.id).where(
         SourceRecord.tenant_id == run.tenant_id,
         SourceRecord.first_seen_run == run.id,
-        SourceRecord.kind == "organization",
+        SourceRecord.kind == kind,
         SourceRecord.valid_to.is_(None),
     )
     return set(session.scalars(query))
 
 
 def match_after_sync(session: Session, run: SyncRun) -> MatchResult | None:
-    """Match the run's new and changed organizations and save the counts on the run.
+    """Match the run's new and changed orgs, then people, and save counts on the run.
 
-    If matching fails, the error is saved on the run and the stored records are kept.
+    Organization and people matching each get their own try/commit so a people failure
+    cannot roll back org matches or wipe org counts. Stored records are kept either way.
     """
     result = None
     try:
@@ -207,9 +228,27 @@ def match_after_sync(session: Session, run: SyncRun) -> MatchResult | None:
         logger.exception("organization matching failed", extra={"sync_run_id": str(run.id)})
         matching_counts = {"error": describe(error)}
 
-    # Copy the counts into a new dict, otherwise the JSON column is not saved.
     counts = dict(run.counts or {})
     counts["matching"] = matching_counts
+    run.counts = counts
+    session.commit()
+
+    try:
+        people_result = match_people(session, run.tenant_id, changed_person_ids(session, run))
+        people_counts = {
+            "people_created": people_result.people_created,
+            "people_merged": people_result.people_merged,
+            "links_created": people_result.links_created,
+            "candidates_created": people_result.candidates_created,
+        }
+        logger.info("people matched", extra={"sync_run_id": str(run.id)})
+    except Exception as error:
+        session.rollback()
+        logger.exception("people matching failed", extra={"sync_run_id": str(run.id)})
+        people_counts = {"error": describe(error)}
+
+    counts = dict(run.counts or {})
+    counts["matching_people"] = people_counts
     run.counts = counts
     session.commit()
     return result
@@ -262,7 +301,12 @@ def fetch(connector: OmerloConnector, source: Source, *, full: bool) -> Fetched:
             workspace_id = workspace["id"]
             since = stored.get(workspace_id, {}).get(kind)
             records = list(connector.fetch_community(kind, workspace_id, since))
-            fetched.records += records
+            fetched.records += [r for r in records if not r.deleted]
+            fetched.deleted += [r for r in records if r.deleted]
+            if connector.reads_event_sessions:
+                fetched.session_events.update(
+                    r.external_id for r in records if r.entity_kind == "event"
+                )
             latest = newest(r for r in records if r.entity_kind == kind)
             if latest is not None:
                 fetched.workspace_newest.setdefault(workspace_id, {})[kind] = latest
@@ -292,11 +336,13 @@ def store(
             for failure in mapped.failures[:MAX_REPORTED_FAILURES]
         ]
     upserted = upsert_records(session, run, mapped.records)
-    removed: list[str] = []
+    failed = {f.external_id for f in mapped.failures}
+    removed = close_reported_deleted(session, run, fetched.deleted)
+    removed += close_dropped_children(
+        session, run, "event_session", "event_id", fetched.session_events, keep=failed
+    )
     if run.mode == "full":
-        removed = close_unseen(
-            session, run, keep={f.external_id for f in mapped.failures}, kinds=fetched.kinds
-        )
+        removed += close_unseen(session, run, keep=failed, kinds=fetched.kinds)
     rechecked = (recheck or recheck_links)(session, run, upserted.carried)
     run.counts = {
         **(run.counts or {}),
@@ -317,6 +363,17 @@ def store(
         "removed": len(removed),
         "failed": len(mapped.failures),
     }
+
+
+def close_reported_deleted(session: Session, run: SyncRun, deleted: list[RawRecord]) -> list[str]:
+    ids_by_kind: dict[str, set[str]] = {}
+    for record in deleted:
+        ids_by_kind.setdefault(record.entity_kind, set()).add(record.external_id)
+    return [
+        external_id
+        for kind, external_ids in sorted(ids_by_kind.items())
+        for external_id in close_deleted(session, run, kind, external_ids)
+    ]
 
 
 def finish(

@@ -28,7 +28,7 @@ from app.processing.normalization import (
     normalize_text,
 )
 
-PERSON_IDENTIFIERS = ("emails", "linkedin")
+PERSON_IDENTIFIERS = ("emails", "phones", "linkedin")
 
 
 def map_organization(payload: dict[str, Any]) -> MappedRecord:
@@ -97,6 +97,20 @@ def map_named_profile(kind: str, payload: dict[str, Any]) -> MappedRecord:
     )
 
 
+def map_event_session(payload: dict[str, Any]) -> MappedRecord:
+    """An event's session; `event_id` is required to find the sessions an event dropped."""
+    if id_text(payload.get("event_id")) is None:
+        raise MappingError("session has no event_id")
+    titles = (html_text(locale.get("title_html")) for locale in live_entries(payload, "locales"))
+    return MappedRecord(
+        kind="event_session",
+        external_id=required_id(payload),
+        workspace_id=None,
+        name_normalized=normalize_text(first(titles)),
+        attributes=without_id(payload),
+    )
+
+
 def map_content(payload: dict[str, Any], blocks: list[Any]) -> MappedRecord:
     locales = live_entries(payload, "locales")
     title = first(html_text(locale.get("title_html")) for locale in locales)
@@ -149,11 +163,12 @@ def required_id(payload: dict[str, Any]) -> str:
     return value
 
 
-PROFILE_MAPPERS: dict[str, Callable[[dict[str, Any]], MappedRecord]] = {
+MAPPERS: dict[str, Callable[[dict[str, Any]], MappedRecord]] = {
     "organization": map_organization,
     "person": map_person,
     "project": map_project,
     "event": map_event,
+    "event_session": map_event_session,
 }
 
 
@@ -169,8 +184,8 @@ def map_record(
         raise MappingError("payload is not a JSON object")
     if kind == "content":
         record = map_content(payload, list(blocks))
-    elif kind in PROFILE_MAPPERS:
-        record = PROFILE_MAPPERS[kind](payload)
+    elif kind in MAPPERS:
+        record = MAPPERS[kind](payload)
     else:
         raise MappingError(f"no mapper for entity kind {kind!r}")
     return replace(record, external_ids=metadata_ids(list(metadata)))

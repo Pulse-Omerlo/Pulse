@@ -6,9 +6,13 @@ from uuid import UUID
 import pytest
 
 from app.models import SourceRecord
+from app.models.people import AUTOMATIC_PERSON_LINK_METHODS
 from app.processing.entity_resolution import MatchCandidateData, evidence
 from app.processing.link_recheck import (
     MATCHING_FIELDS,
+    PERSON_KNOWN_EVIDENCE_FIELDS,
+    PERSON_MATCHING_FIELDS,
+    PERSON_RECHECK,
     REASON_HOLDS,
     REASON_PARTNER_CHANGED,
     REASON_UNVERIFIABLE,
@@ -493,3 +497,108 @@ def test_partner_side_order_independent():
 
     # Assert
     assert forward == reverse == expected
+
+
+def person(number: int = 1, **fields) -> SourceRecord:
+    return SourceRecord(
+        **(
+            {
+                "id": UUID(int=number),
+                "tenant_id": TENANT,
+                "kind": "person",
+                "external_id": str(number),
+                "external_ids": {},
+                "attributes": {"identifiers": {}},
+            }
+            | fields
+        )
+    )
+
+
+def test_person_matching_fields_cover_tier1_identifiers():
+    # Act / Assert
+    assert PERSON_MATCHING_FIELDS == (
+        "name_normalized",
+        "linkedin",
+        "identifiers.emails",
+        "identifiers.phones",
+        "organization_id",
+    )
+
+
+def test_person_linkedin_change_is_detected():
+    # Arrange
+    before = person(1, linkedin="in/bob", attributes={"identifiers": {"linkedin": ["in/bob"]}})
+    after = person(2, linkedin="in/alice", attributes={"identifiers": {"linkedin": ["in/alice"]}})
+
+    # Act
+    changes = matching_changes(
+        before, after, fields=PERSON_MATCHING_FIELDS, value_of=PERSON_RECHECK.value_of
+    )
+
+    # Assert
+    assert changes["linkedin"] == {
+        "before": frozenset({"in/bob"}),
+        "after": frozenset({"in/alice"}),
+    }
+
+
+def test_person_email_evidence_holds_across_rename_of_unrelated_attrs():
+    # Arrange
+    left = person(
+        1,
+        name_normalized="marie",
+        attributes={"identifiers": {"emails": ["a@example.com"]}, "job_titles": {"en": "CEO"}},
+    )
+    right = person(
+        2,
+        name_normalized="marie",
+        attributes={"identifiers": {"emails": ["a@example.com"]}},
+    )
+    payload = [
+        {
+            "rule": "email",
+            "rule_set_version": "tier1-v1",
+            "field": "name_normalized",
+            "value": "marie",
+            "matched_value": "marie",
+            "matched_record_id": str(right.id),
+        },
+        {
+            "rule": "email",
+            "rule_set_version": "tier1-v1",
+            "field": "identifiers.emails",
+            "value": "a@example.com",
+            "matched_value": "a@example.com",
+            "matched_record_id": str(right.id),
+        },
+    ]
+
+    # Act
+    verdict = evidence_holds(
+        "email",
+        payload,
+        left,
+        [left, right],
+        EXCLUDED,
+        automatic_methods=AUTOMATIC_PERSON_LINK_METHODS,
+        known_fields=PERSON_KNOWN_EVIDENCE_FIELDS,
+        record_has=PERSON_RECHECK.record_has,
+    )
+
+    # Assert
+    assert verdict == LinkVerdict(holds=True, reason=REASON_HOLDS)
+
+
+def test_person_company_linkedin_does_not_count_as_person_handle():
+    # Arrange
+    before = person(1, linkedin="company/acme", attributes={})
+    after = person(2, linkedin="company/other", attributes={})
+
+    # Act
+    changes = matching_changes(
+        before, after, fields=PERSON_MATCHING_FIELDS, value_of=PERSON_RECHECK.value_of
+    )
+
+    # Assert
+    assert "linkedin" not in changes

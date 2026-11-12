@@ -1,3 +1,4 @@
+# AI contribution: Below 50% AI-generated
 """Schema rules of data model v1 (#25), checked on the model metadata without a database."""
 
 import pytest
@@ -32,7 +33,7 @@ def covers(index_columns: list[str], unique: bool, fk_columns: list[str]) -> boo
     return leading == set(fk_columns) or (unique and set(index_columns) <= set(fk_columns))
 
 
-def test_the_data_model_has_its_eleven_tables():
+def test_the_data_model_has_its_tables():
     assert set(TABLES) == {
         "tenant",
         "source",
@@ -41,6 +42,8 @@ def test_the_data_model_has_its_eleven_tables():
         "source_record",
         "organization",
         "org_link",
+        "person",
+        "person_link",
         "match_candidate",
         "record_change",
         "industry_classification",

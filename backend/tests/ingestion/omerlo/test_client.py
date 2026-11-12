@@ -10,6 +10,7 @@ from app.ingestion.omerlo.client import (
     OmerloNotFoundError,
     create_omerlo_client,
     get_json,
+    raise_for_auth,
 )
 from app.ingestion.omerlo.settings import OmerloSettings
 
@@ -136,3 +137,18 @@ def test_malformed_response_raises(client, response):
 
     with pytest.raises(OmerloAPIError):
         get_json(client, "/x")
+
+
+@pytest.mark.parametrize(("status", "message"), [(401, "rejected the API key"), (403, "role")])
+def test_raise_for_auth_names_the_path_and_the_cause(status, message):
+    # Arrange
+    response = httpx.Response(status)
+
+    # Act / Assert
+    with pytest.raises(OmerloAuthError, match=f"/x: .*{message}"):
+        raise_for_auth(response, "/x")
+
+
+def test_raise_for_auth_lets_other_answers_through():
+    # Act / Assert
+    raise_for_auth(httpx.Response(404), "/x")

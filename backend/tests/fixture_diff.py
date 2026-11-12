@@ -12,13 +12,14 @@ from typing import Any
 from app.ingestion.omerlo.mapping.mappers import MappedRecord, map_record
 from synthetic.omerlo_fixtures import TenantData
 
-# Fixture files stored as source records, and their entity kind. Workspaces, categories and
-# event sessions are not source records, so their changes are not expected.
+# Fixture files stored as source records, and their entity kind. Workspaces and categories
+# are not source records, so their changes are not expected.
 KINDS = {
     "organizations": "organization",
     "people": "person",
     "projects": "project",
     "events": "event",
+    "event_sessions": "event_session",
 }
 
 # Contact fields and the identifiers the mapper derives from them.
@@ -28,7 +29,7 @@ IDENTIFIERS = {
     "website": {"attributes.identifiers.domains", "domain"},
     "linkedin": {"attributes.identifiers.linkedin", "linkedin"},
 }
-PERSON_IDENTIFIERS = {key: IDENTIFIERS[key] for key in ("email", "linkedin")}
+PERSON_IDENTIFIERS = {key: IDENTIFIERS[key] for key in ("email", "phone", "linkedin")}
 NAMES = {"organization": ("name",), "person": ("first_name", "last_name")}
 
 Key = tuple[str, str]
