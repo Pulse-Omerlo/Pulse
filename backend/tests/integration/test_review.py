@@ -115,10 +115,9 @@ def test_accepting_two_loose_records_creates_one_organization(net, session):
         links = [session.get(OrgLink, r.id) for r in (a, b)]
         assert {(link.method, link.decided_by) for link in links} == {("manual", REVIEWER)}
         organization = session.get(Organization, net.organization_of(a))
-        assert (organization.display_name, organization.primary_domain) == (
-            "Atelier Boréal",
-            "boreal.ca",
-        )
+        # Named after the pair's first record, whichever that is.
+        assert organization.display_name in {"Atelier Boréal", "Atelier Boreal"}
+        assert organization.primary_domain == "boreal.ca"
         assert (candidate.status, candidate.decided_by) == ("accepted", REVIEWER)
         assert candidate.decided_at is not None
 
@@ -161,7 +160,8 @@ def test_undoing_a_merge_puts_both_organizations_back(net, session):
     # Arrange
     a = net.record("a1", "Acme", "acme.ca")
     b1, b2 = net.record("b1", "Acme Quebec", "acmeqc.ca"), net.record("b2", "Acme Qc")
-    big, small = net.organization("Acme", a), net.organization("Acme Quebec", b1, b2)
+    # Accepting merges the one-record organization into the two-record one.
+    small, big = net.organization("Acme", a), net.organization("Acme Quebec", b1, b2)
     candidate = net.candidate(a, b1)
     with net.bound():
         review.accept(session, net.tenant.id, candidate.id, REVIEWER)
@@ -176,6 +176,7 @@ def test_undoing_a_merge_puts_both_organizations_back(net, session):
         assert big.merged_into is None and small.merged_into is None
         assert session.get(OrgLink, a.id).organization_id == small.id
         assert {session.get(OrgLink, r.id).organization_id for r in (b1, b2)} == {big.id}
+        assert candidate.decision is None
         assert (candidate.status, candidate.decided_by, candidate.decision) == (
             "pending",
             None,
