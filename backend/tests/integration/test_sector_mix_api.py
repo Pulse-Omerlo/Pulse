@@ -62,7 +62,11 @@ def test_a_sync_stores_a_mix_whose_figures_add_up(api, session, source, sync):
     counted = sum(s["organization_count"] for s in mix["sectors"])
     assert counted + len(mix["unclassified"]) == mix["organizations"]
     assert sum(s["organization_share"] for s in mix["sectors"]) == pytest.approx(100, abs=1)
-    assert mix["people_status"] == "not_linked"
+    # Synthetic people have work emails at their employer's domain, so they are placed.
+    assert mix["people_status"] == "linked"
+    placed = sum(s["people_count"] for s in mix["sectors"])
+    assert 0 < placed == mix["people"] - len(mix["people_unplaced"])
+    assert sum(s["people_share"] for s in mix["sectors"]) == pytest.approx(100, abs=1)
 
 
 def test_the_planted_target_is_reported_as_a_gap(api, source, sync):
