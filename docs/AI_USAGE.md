@@ -37,6 +37,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | --- | --- | --- |
 | Claude Code (Anthropic) | AbdelrahmanWM | Writing code and tests from issues, reviewing diffs, drafting PR descriptions and issues |
 | Cursor (agent mode) | mijanullah12 | Designing and writing the file import and its tests from issue #24, drafting commit messages and docs |
+| Cursor (agent mode) | hendriktebeng | Implementing automatic org-link recheck (#110) and its tests |
 
 ## Features built with substantial AI help
 
@@ -54,6 +55,9 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | CSV and JSON file import | #24 | |
 | Industry classification of organizations | #149 | |
 | Tenant API for organizations, runs and duplicates | #63 | |
+| Recheck automatic organization links on matching-field change | #110 | |
+| Merging organizations joined by a chain of matches | #108 | |
+| Tier 2 fuzzy matching of organizations | #111 | |
 
 ## Details
 
@@ -207,6 +211,106 @@ cases. A test counts the SQL statements of each list and checks that a page of
 **Problem found:** the first query-count test compared the first call with the
 second, but the first call also loads the tenant into the session, so the two
 differed for a reason unrelated to the page size. It now makes one call first.
+
+### Recheck automatic organization links (#110)
+
+Cursor wrote the pure matching-field diff and evidence check, the store-time
+service that drops failing automatic `org_link` rows on new versions only, the
+`members_as_of` history helper, and the paired mutation sets used to exercise
+domain, LinkedIn removal and rename. Rematch stays in the existing
+`match_after_sync` path (#109).
+
+**Verification:** unit tests cover field diffs, evidence verdicts and sync
+wiring. Integration tests against Postgres cover drops, empty organizations,
+as-of membership and unchanged old-version links.
+
+### Merging organizations joined by a chain of matches (#108)
+
+Claude Code wrote the union-find clustering, the conflict check that cuts the
+weakest link of a chain, the survivor and display value rules, and the change
+to `match_organizations` that merges organizations and sets `merged_into`. It
+also wrote the `merged_into` migration, the helper that resolves a merged id,
+and the tests. Treating a rejected pair like a conflict, so the rest of the
+chain still links, was its proposal; the PR lists it under decisions to review.
+
+**Verification:** unit tests in `tests/processing/test_clustering.py` run the
+planner on plain data (a three-record chain, two organizations merged, a
+conflicting chain, a parent and subsidiary sharing a LinkedIn URL, a manual
+organization, a rule outside Tier 1). The integration tests merge real
+organizations on Postgres, roll the merge back, rerun it with no changes and
+check tenant isolation. The Tier 1 report gives the same precision and recall
+as before.
+
+**Problem found:** `blocked_matches` sorted matches with
+`RULE_PRIORITIES.index`, which would have raised on any new rule such as the
+planned `fuzzy` one. It now uses the same sort key as the clustering.
+
+**Problems found in review** (the first generated version had all of these):
+- An organization whose members already disagreed (two domains linked by a
+  reviewer, or a member whose domain changed) could never gain a record, so
+  new matches formed a duplicate organization. Only a disagreement that a join
+  adds is now blocked.
+- A record sharing a domain with two subsidiaries on different LinkedIn pages
+  joined whichever had the smaller id. It now joins neither.
+- A removed record that came back after a merge kept a link to the merged
+  organization. Copying a link now follows `merged_into`.
+- The conflict check rescanned every member on each edge, so 800 records on
+  one domain took minutes to plan.
+- A reviewer's organization name was overwritten, and an external id could
+  win the display name vote over real names.
+- Sites on shared hosts (`x.wixsite.com` keeps only `wixsite.com`) chained
+  unrelated organizations; those hosts are now generic domains.
+
+### Tier 2 fuzzy matching of organizations (#111)
+
+Claude Code wrote the fuzzy matching settings and their validation, the
+blocking, scoring and link or review decision in `fuzzy_matching.py`, the
+migration that allows `fuzzy` links, the hard variant in the accuracy report,
+and the hook-up into the #108 planner: a fuzzy edge adds one unlinked record to
+a member that is not tentative, records placed through a fuzzy match stay
+tentative (a marker in the link evidence carries this to the next sync) and
+cannot merge organizations, each record is linked through its strongest kept
+edge, and equally close fuzzy edges into two groups attach the record to
+neither. It also ran the threshold sweep used to pick the default, and the
+near-miss negatives and timings asked for in review.
+
+**Verification:** unit tests cover the settings file, near misses (one letter
+apart in the only distinctive word, different numbers, generic words only),
+the inclusive threshold, each secondary signal and each conflict, the evidence a
+spelling, word order or ending difference needs, blocking, oversized blocks
+(split, then windowed, with comparisons counted) and the evidence of each side.
+Integration tests run `match_organizations` for a link, a review candidate, a
+rejected pair, a record joining an existing organization, two organizations
+that must not be merged, manual links, a new record bridging two organizations
+through a fuzzy member in one sync and over two syncs, Tier 1 records keeping
+Tier 1 links whatever the record ids, and the same records arriving in one or
+two syncs, and run the migration down and up.
+
+**Problems found:**
+- The first scorer compared names with generic words removed. A typo inside a
+  generic word ("pharmacei") then counted as distinctive and hid the match.
+  Each distinctive word now has to be spelled closely somewhere in the other
+  name instead.
+- `token_set_ratio` gives 100 when one name's words are a subset of the other's
+  ("tremblay" and "boulangerie tremblay") and made 4 false links on the hard
+  variant, so the scorer stayed `token_sort_ratio`.
+- The typo helper of the hard variant crashed on names with no long word; a
+  unit test found it.
+- The first migration test left a fuzzy link committed, so the fixture's
+  downgrade to base stopped on it. The downgrade now deletes fuzzy links and
+  the organizations they leave empty, like revisions 0004 and 0007.
+- Team review found that one letter of difference in a surname plus a shared
+  city auto-linked distinct businesses (Martin and Marin), that oversized
+  blocks were dropped without a trace, and that fuzzy candidates outranked
+  Tier 1 ones. Each is fixed and tested; the hard report now adds near-miss
+  negatives so the threshold sweep shows false positives.
+- The first near-miss negatives sometimes reused a name the tenant already
+  had, which Tier 1 then matched. Such names are now skipped.
+- A second review of the planner found that fuzzy edges chained (Marin,
+  Martin, Martine in one organization), that a new record could merge two
+  organizations through a fuzzy-linked member, in one sync or two, that a
+  Tier 1 record could be saved with a fuzzy link when the fuzzy record had the
+  smallest id, and that equal scores were decided by id order. Each has a test.
 
 ### Synthetic data pipeline into Omerlo staging (#148)
 

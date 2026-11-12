@@ -120,14 +120,27 @@ A mutation set is data in `mutate.py`: a name, a description and steps.
 
 Fields that can be edited:
 
-- organizations: `name`, `domain` (canonical URL, website and email in every locale), `linkedin`, `crm_id` (metadata), `phone`
+- organizations: `name`, `domain` (canonical URL, website and email in every locale), `linkedin`, `linkedin_removed` (clears LinkedIn in every locale), `crm_id` (metadata), `phone`
 - people: `last_name`, `job_title`, `email`, `linkedin`
+
+`Edit(..., paired=True)` limits eligibility to records listed in
+`ground_truth["organization_duplicates"]` or `person_duplicates`, so the edited
+record is one Tier 1 may already have linked. Default `paired=False` keeps the
+`demo` set unchanged.
 
 Records are picked by an RNG seeded with the set and tenant, among records sorted by id that no earlier step touched, so the same set on the same fixtures always gives byte-identical files. Deletes skip records still referenced (project owners, session speakers) and records in a deliberate duplicate pair, so the ground truth stays consistent; it is updated for adds and deletes.
 
 Every added or edited record gets an `updated_at` after every record already in the fixtures (one day after the latest, one minute apart), so an incremental sync sorted by `updated_at-desc` sees it. A metadata change also bumps its record's `updated_at`. Changed records are validated against the schema models.
 
 The `demo` set, in each tenant: adds 2 organizations and 3 people; edits organizations by name, domain, LinkedIn, CRM id, phone and one by name, domain, LinkedIn and CRM id together; edits people by job title, by last name and email, and by LinkedIn; deletes 1 organization, 2 people and 1 event.
+
+Small recheck sets (one paired edit each):
+
+| Set | Step |
+|-----|------|
+| `recheck_domain` | change domain |
+| `recheck_linkedin` | clear LinkedIn (`linkedin_removed`) |
+| `recheck_rename` | rename |
 
 Each set writes `expected_diff.<set>.json` next to the fixtures:
 

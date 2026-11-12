@@ -13,7 +13,7 @@ from sqlalchemy import event, func, select
 from app.api.browse import database
 from app.core.tenancy import bound_to_tenant
 from app.main import app
-from app.models import MatchCandidate, OrgLink, RecordChange, SourceRecord
+from app.models import MatchCandidate, Organization, OrgLink, RecordChange, SourceRecord
 from app.processing.entity_resolution import match_organizations
 from synthetic.mutate import DEMO, apply_set
 from tests.integration.test_sync_runs import (  # noqa: F401
@@ -232,6 +232,30 @@ def test_a_bigger_page_runs_no_more_queries(api, session, matched, path):
     # Assert
     assert len(many["items"]) >= len(one["items"])
     assert len(large) == len(small)
+
+
+def test_a_merged_organization_id_shows_the_organization_it_was_merged_into(
+    api, session, source, matched
+):
+    # Arrange
+    survivor = a_group(api, matched)
+    with bound_to_tenant(session, source.tenant_id):
+        merged = Organization(
+            tenant_id=source.tenant_id, display_name="Old name", merged_into=survivor["id"]
+        )
+        session.add(merged)
+        session.commit()
+        merged_id = merged.id
+
+    # Act
+    detail = api.get(f"{matched}/organizations/{merged_id}")
+    timeline = api.get(f"{matched}/organizations/{merged_id}/timeline")
+
+    # Assert
+    assert detail.json() == api.get(f"{matched}/organizations/{survivor['id']}").json()
+    expected = api.get(f"{matched}/organizations/{survivor['id']}/timeline").json()
+    assert timeline.json() == expected
+    assert expected["total"] > 0
 
 
 def test_another_organization_id_is_not_found(api, matched):

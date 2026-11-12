@@ -19,14 +19,16 @@ BATCH_SIZE = 1000
 _ID_PAIRS = "unnest(CAST(:old_ids AS uuid[]), CAST(:new_ids AS uuid[])) AS m(old_id, new_id)"
 _ID_ARRAYS = (bindparam("old_ids", type_=ARRAY(UUID)), bindparam("new_ids", type_=ARRAY(UUID)))
 
+# A link to a merged organization is copied onto the organization it was merged into.
 COPY_ORG_LINKS = text(
     f"""
     INSERT INTO org_link (source_record_id, organization_id, tenant_id, method, confidence,
                           decided_by, decided_at, evidence)
-    SELECT m.new_id, l.organization_id, l.tenant_id, l.method, l.confidence, l.decided_by,
-           l.decided_at, l.evidence
+    SELECT m.new_id, COALESCE(o.merged_into, l.organization_id), l.tenant_id, l.method,
+           l.confidence, l.decided_by, l.decided_at, l.evidence
     FROM org_link l
     JOIN {_ID_PAIRS} ON l.source_record_id = m.old_id
+    JOIN organization o ON o.tenant_id = l.tenant_id AND o.id = l.organization_id
     WHERE l.tenant_id = :tenant_id
     """
 ).bindparams(*_ID_ARRAYS)
@@ -71,6 +73,8 @@ class UpsertResult:
     added: list[str] = field(default_factory=list)
     changed: list[str] = field(default_factory=list)
     unchanged: list[str] = field(default_factory=list)
+    # (previous version id, new version id) pairs that received copied links.
+    carried: list[tuple[uuid.UUID, uuid.UUID]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -115,6 +119,7 @@ def upsert_records(
         result.added += plan.result.added
         result.changed += plan.result.changed
         result.unchanged += plan.result.unchanged
+        result.carried += plan.carried
     return result
 
 

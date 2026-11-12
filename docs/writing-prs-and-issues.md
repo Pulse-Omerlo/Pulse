@@ -57,6 +57,51 @@ Use `.github/pull_request_template.md` and keep its sections:
     being declared (`scripts/ai_declarations.py`).
 - **No "Generated with ..." footer** and no `Co-Authored-By` line.
 
+## Stacked pull requests
+
+When a change builds on another PR that is not merged yet, stack them with
+GitHub's stacked pull requests and the `gh stack` CLI. Do not open a PR against
+another feature branch by hand, and do not fold both changes into one large PR.
+Changes that do not depend on each other stay as separate PRs on `main`.
+
+Setup, once per machine: GitHub CLI 2.90.0 or later (`gh --version`), Git 2.36
+or later, then:
+
+```bash
+gh extension install github/gh-stack
+gh skill install github/gh-stack    # optional: teaches coding agents the gh stack commands
+```
+
+Rules for a stack:
+
+- Each layer is one branch and one PR for one issue. Branch names keep the
+  usual `feature/<issue>-<slug>` form, so pass them explicitly. Each PR keeps
+  the normal title and template, including its own `Closes #N` and "AI
+  assistance" section.
+- `gh stack submit --auto` opens draft PRs with generated titles and bodies.
+  Fix each one with `gh pr edit <number> --title ... --body-file ...` before
+  asking for review; the AI assistance check fails on the generated body.
+- Review fixes to a lower layer: commit on that layer's branch, then
+  `gh stack rebase --upstack` and `gh stack push`. Never `git push --force` a
+  stack branch by hand.
+- Stacks merge bottom-up, after review, like any other PR.
+
+Coding agents cannot answer prompts, so they use these forms:
+
+```bash
+gh stack init feature/<issue>-<slug>                   # bottom layer, based on main
+gh stack add -Am "<commit message>" feature/<issue>-<slug>   # next layer, run from the top branch
+gh stack submit --auto                                 # push all layers, open draft PRs
+gh stack view --short                                  # or --json
+gh stack checkout <pr-number>                          # move to a layer (also up, down, top, bottom)
+gh stack rebase --upstack && gh stack push             # after changing a lower layer
+gh stack sync --prune                                  # after a layer merged
+```
+
+Agents never run `gh stack merge`, `gh stack unstack`, `gh stack switch` or
+`gh stack modify` (the last two are interactive). A rebase conflict stops with
+exit code 3: stop and ask, rather than resolving it unasked.
+
 ## Issues
 
 Backlog issues are generated from `scripts/tickets/data.py` (see `CLAUDE.md`).
