@@ -9,7 +9,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app import match as match_command
@@ -32,6 +32,7 @@ from app.models import RawRecord as RawRecordRow
 from app.processing.entity_resolution import MatchResult, match_organizations
 from app.seed import seed
 from app.services import sync_runs
+from app.services.sync_lock import source_sync_lock
 from app.services.sync_runs import OmerloReader, run_sync
 from app.storage.local import LocalArchive
 from synthetic.fixture_loader import load_fixtures
@@ -488,6 +489,120 @@ def test_sync_command_exits_with_an_error_when_the_run_fails(
     with pytest.raises(SystemExit) as exit_info:
         sync_command.main(["--tenant", SLUG])
     assert exit_info.value.code == 1
+
+
+def client_for_settings(app):
+    """A mock client that sends the key of the source being synced, like the real client."""
+    return lambda settings: TestClient(
+        app, base_url="http://mock/api", headers={"x-api-key": settings.api_key.get_secret_value()}
+    )
+
+
+def seeded_sources(engine) -> dict[str, uuid.UUID]:
+    with Session(engine) as setup:
+        seed(setup)
+        setup.commit()
+        rows = setup.execute(
+            select(Tenant.omerlo_media_id, Source.id).join(Source, Source.tenant_id == Tenant.id)
+        ).all()
+    return dict(rows)
+
+
+def test_sync_all_runs_every_source_of_every_tenant(
+    migrated_database, mock_app, tmp_path, monkeypatch, capsys
+):
+    # Arrange
+    sources = seeded_sources(migrated_database)
+    monkeypatch.setenv("ARCHIVE_DIR", str(tmp_path / "archive"))
+    monkeypatch.setattr(sync_command, "create_omerlo_client", client_for_settings(mock_app))
+
+    # Act
+    sync_command.main(["--all", "--full"])
+
+    # Assert
+    lines = [line for line in capsys.readouterr().out.splitlines() if ", source " in line]
+    assert len(sources) == 2
+    assert len(lines) == len(sources)
+    assert all("(full) succeeded" in line for line in lines)
+    with Session(migrated_database) as check:
+        synced = set(check.scalars(select(SyncRun.source_id)))
+    assert synced == set(sources.values())
+
+
+def test_sync_all_skips_a_source_whose_sync_is_already_running(
+    migrated_database, mock_app, tmp_path, monkeypatch, capsys
+):
+    # Arrange
+    sources = seeded_sources(migrated_database)
+    busy = sources[SLUG]
+    monkeypatch.setenv("ARCHIVE_DIR", str(tmp_path / "archive"))
+    monkeypatch.setattr(sync_command, "create_omerlo_client", client_for_settings(mock_app))
+
+    # Act
+    with source_sync_lock(migrated_database, busy):
+        sync_command.main(["--all"])
+
+    # Assert
+    out = capsys.readouterr().out
+    assert f"source {busy}: skipped" in out
+    with Session(migrated_database) as check:
+        synced = set(check.scalars(select(SyncRun.source_id)))
+    assert synced == set(sources.values()) - {busy}
+
+
+def test_sync_all_keeps_going_after_a_failed_source_and_exits_with_an_error(
+    migrated_database, mock_app, tmp_path, monkeypatch, capsys
+):
+    # Arrange
+    sources = seeded_sources(migrated_database)
+    other = next(slug for slug in sources if slug != SLUG)
+    monkeypatch.setenv("ARCHIVE_DIR", str(tmp_path / "archive"))
+    working = client_for_settings(mock_app)
+    monkeypatch.setattr(
+        sync_command,
+        "create_omerlo_client",
+        lambda settings: (
+            mock_client(mock_app, "nobody")
+            if settings.api_key.get_secret_value() == api_key_for(SLUG)
+            else working(settings)
+        ),
+    )
+
+    # Act
+    with pytest.raises(SystemExit) as exit_info:
+        sync_command.main(["--all"])
+
+    # Assert
+    assert exit_info.value.code == 1
+    with Session(migrated_database) as check:
+        statuses = dict(check.execute(select(SyncRun.source_id, SyncRun.status)).all())
+    assert statuses == {sources[SLUG]: "failed", sources[other]: "succeeded"}
+
+
+def test_sync_all_reports_a_source_that_cannot_start_and_syncs_the_rest(
+    migrated_database, mock_app, tmp_path, monkeypatch, capsys
+):
+    # Arrange
+    sources = seeded_sources(migrated_database)
+    with Session(migrated_database) as setup:
+        setup.execute(
+            update(Source).where(Source.id == sources[SLUG]).values(kind="omerlo", config={})
+        )
+        setup.commit()
+    monkeypatch.delenv("OMERLO_API_KEY", raising=False)
+    monkeypatch.delenv("OMERLO_BASE_URL", raising=False)
+    monkeypatch.setenv("ARCHIVE_DIR", str(tmp_path / "archive"))
+    monkeypatch.setattr(sync_command, "create_omerlo_client", client_for_settings(mock_app))
+
+    # Act
+    with pytest.raises(SystemExit) as exit_info:
+        sync_command.main(["--all"])
+
+    # Assert
+    out = capsys.readouterr().out
+    assert exit_info.value.code == 1
+    assert f"source {sources[SLUG]}: could not start" in out
+    assert "succeeded" in out
 
 
 def test_sync_command_rejects_an_unknown_tenant(migrated_database, capsys):

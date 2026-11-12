@@ -5,7 +5,7 @@ import pytest
 
 from app.models import Source, SyncRun, Tenant
 from app.seed import MOCK_OMERLO_BASE_URL
-from app.sync import SyncCommandError, omerlo_settings, summary
+from app.sync import SourceOutcome, SyncCommandError, main, omerlo_settings, summary
 
 TENANT = Tenant(id=uuid.uuid4(), name="Média démo Capitale", omerlo_media_id="demo-capitale")
 
@@ -77,3 +77,41 @@ def test_summary_lists_the_counts_and_the_error():
         f"Sync run {run.id} (incremental) failed: fetched 3, new 0, changed 0, unchanged 0, "
         "removed 0, failed 0\nOmerloAuthError: rejected"
     )
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [[], ["--all", "--tenant", "demo-capitale"], ["--all", "--source", str(uuid.UUID(int=1))]],
+)
+def test_the_command_needs_exactly_one_tenant_or_all(argv, capsys):
+    # Act
+    with pytest.raises(SystemExit) as exit_info:
+        main(argv)
+
+    # Assert
+    assert exit_info.value.code == 2
+    assert "error" in capsys.readouterr().err
+
+
+def test_an_outcome_line_names_the_tenant_and_the_source():
+    # Arrange
+    source_id = uuid.UUID(int=2)
+    run = SyncRun(id=uuid.UUID(int=1), mode="full", status="succeeded", counts={}, error=None)
+
+    # Act
+    synced = SourceOutcome("Capitale", source_id, run_summary=summary(run), run_status=run.status)
+    skipped = SourceOutcome("Capitale", source_id, skipped=True)
+    broken = SourceOutcome("Capitale", source_id, error="ValidationError: api_key missing")
+
+    # Assert
+    assert synced.line().startswith(f"Capitale, source {source_id}: Sync run {run.id} (full)")
+    assert not synced.failed
+    assert skipped.line().endswith("skipped, another sync of this source is running")
+    assert not skipped.failed
+    assert broken.line().endswith("could not start: ValidationError: api_key missing")
+    assert broken.failed
+
+
+def test_an_outcome_with_a_failed_run_counts_as_failed():
+    # Act / Assert
+    assert SourceOutcome("Capitale", uuid.UUID(int=2), run_status="failed").failed

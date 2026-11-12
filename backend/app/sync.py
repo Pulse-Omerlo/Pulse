@@ -1,28 +1,33 @@
 # AI contribution: 50% or more AI-generated
-"""Run one sync of a tenant's source and print the recorded sync run.
+"""Run one sync of a tenant's source, or of every source, and print the recorded sync runs.
 
 uv run python -m app.sync --tenant demo-capitale            # incremental
 uv run python -m app.sync --tenant demo-capitale --full     # also marks removed records
+uv run python -m app.sync --all                             # every source of every tenant
 """
 
 import argparse
 import sys
 import uuid
 from collections.abc import Sequence
+from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import Engine, select
 from sqlalchemy.orm import Session
 
-from app.core.database import get_session_factory
-from app.core.logging import configure_logging
+from app.core.database import get_engine, get_session_factory
+from app.core.logging import configure_logging, get_logger
 from app.core.tenancy import bound_to_tenant, system_access
 from app.ingestion.omerlo.client import create_omerlo_client
 from app.ingestion.omerlo.connector import OmerloConnector
 from app.ingestion.omerlo.settings import OmerloSettings
 from app.models import Source, SyncRun, Tenant
 from app.seed import MOCK_OMERLO_BASE_URL
+from app.services.sync_lock import source_sync_lock
 from app.services.sync_runs import COUNT_KEYS, OmerloReader, run_sync
 from app.storage.settings import create_archive
+
+logger = get_logger(__name__)
 
 # File sources are imported with app.import_file instead.
 SYNCED_KINDS = ("omerlo", "mock")
@@ -88,35 +93,113 @@ def summary(run: SyncRun) -> str:
     return f"{line}\n{run.error}" if run.error else line
 
 
-def sync(session: Session, tenant_key: str, source_id: str | None, *, full: bool) -> SyncRun:
-    # Finding the tenant by its slug looks across tenants; everything after is scoped to it.
-    with system_access(session):
-        tenant = find_tenant(session, tenant_key)
+def sync_source(session: Session, tenant: Tenant, source: Source, *, full: bool) -> SyncRun:
     with bound_to_tenant(session, tenant.id):
-        source = find_source(session, tenant, source_id, SYNCED_KINDS)
         settings = omerlo_settings(source, tenant)
         with create_omerlo_client(settings) as client:
             connector = OmerloConnector(client, workspace_ids=source.config.get("workspace_ids"))
             return run_sync(session, source, OmerloReader(connector), create_archive(), full=full)
 
 
+def sync(session: Session, tenant_key: str, source_id: str | None, *, full: bool) -> SyncRun:
+    # Finding the tenant by its slug looks across tenants; everything after is scoped to it.
+    with system_access(session):
+        tenant = find_tenant(session, tenant_key)
+    with bound_to_tenant(session, tenant.id):
+        source = find_source(session, tenant, source_id, SYNCED_KINDS)
+    return sync_source(session, tenant, source, full=full)
+
+
+@dataclass
+class SourceOutcome:
+    """What happened to one source in a sync of every source."""
+
+    tenant_name: str
+    source_id: uuid.UUID
+    # Read while the session is bound to the tenant; the run row expires at the next commit.
+    run_summary: str | None = None
+    run_status: str | None = None
+    skipped: bool = False
+    error: str | None = None
+
+    @property
+    def failed(self) -> bool:
+        return self.error is not None or self.run_status not in (None, "succeeded")
+
+    def line(self) -> str:
+        prefix = f"{self.tenant_name}, source {self.source_id}"
+        if self.skipped:
+            return f"{prefix}: skipped, another sync of this source is running"
+        if self.error is not None:
+            return f"{prefix}: could not start: {self.error}"
+        return f"{prefix}: {self.run_summary}"
+
+
+def synced_sources(session: Session) -> list[tuple[uuid.UUID, uuid.UUID]]:
+    """(tenant id, source id) of every source that can be synced, by tenant name."""
+    with system_access(session):
+        rows = session.execute(
+            select(Tenant.id, Source.id)
+            .join(Source, Source.tenant_id == Tenant.id)
+            .where(Source.kind.in_(SYNCED_KINDS))
+            .order_by(Tenant.name, Source.id)
+        ).all()
+    return [(tenant_id, source_id) for tenant_id, source_id in rows]
+
+
+def sync_all(session: Session, engine: Engine, *, full: bool) -> list[SourceOutcome]:
+    """Sync every source one after the other; one failing source does not stop the others."""
+    outcomes = []
+    for tenant_id, source_id in synced_sources(session):
+        with system_access(session):
+            tenant = session.get_one(Tenant, tenant_id)
+        outcome = SourceOutcome(tenant.name, source_id)
+        with source_sync_lock(engine, source_id) as locked:
+            if not locked:
+                outcome.skipped = True
+                logger.warning("sync_skipped_locked", source=str(source_id))
+            else:
+                try:
+                    with bound_to_tenant(session, tenant_id):
+                        source = session.get_one(Source, source_id)
+                    run = sync_source(session, tenant, source, full=full)
+                    with bound_to_tenant(session, tenant_id):
+                        outcome.run_summary, outcome.run_status = summary(run), run.status
+                except Exception as error:
+                    session.rollback()
+                    outcome.error = f"{type(error).__name__}: {error}"
+                    logger.exception("sync_not_started", source=str(source_id))
+        outcomes.append(outcome)
+    return outcomes
+
+
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run one sync of a tenant's source.")
-    parser.add_argument("--tenant", required=True, help="tenant id or Omerlo media slug")
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--tenant", help="tenant id or Omerlo media slug")
+    target.add_argument("--all", action="store_true", help="every source of every tenant")
     parser.add_argument("--source", help="source id; optional when the tenant has one source")
     parser.add_argument(
         "--full", action="store_true", help="fetch everything and mark missing records removed"
     )
     args = parser.parse_args(argv)
+    if args.all and args.source:
+        parser.error("--source only goes with --tenant")
     configure_logging()
 
     with get_session_factory()() as session:
-        try:
-            run = sync(session, args.tenant, args.source, full=args.full)
-        except SyncCommandError as error:
-            parser.exit(2, f"error: {error}\n")
-        print(summary(run))
-        succeeded = run.status == "succeeded"
+        if args.all:
+            outcomes = sync_all(session, get_engine(), full=args.full)
+            for outcome in outcomes:
+                print(outcome.line())
+            succeeded = not any(outcome.failed for outcome in outcomes)
+        else:
+            try:
+                run = sync(session, args.tenant, args.source, full=args.full)
+            except SyncCommandError as error:
+                parser.exit(2, f"error: {error}\n")
+            print(summary(run))
+            succeeded = run.status == "succeeded"
     if not succeeded:
         sys.exit(1)
 
