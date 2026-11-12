@@ -6,8 +6,13 @@ primary_region = 'yyz'
 [build]
   dockerfile = 'Dockerfile.prod'
 
+  # Empty: the UI calls the API on its own origin, through the nginx proxy.
   [build.args]
-    VITE_API_URL = 'https://pulse-api.fly.dev'
+    VITE_API_URL = ''
+
+# UI_USERNAME and UI_PASSWORD are set with `fly secrets set`; without them nginx does not start.
+[env]
+  API_UPSTREAM = 'http://pulse-api.flycast'
 
 [http_service]
   internal_port = 8080
