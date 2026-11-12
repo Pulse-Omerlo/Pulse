@@ -38,10 +38,18 @@ function failed(path: string, error: ApiError): ApiError {
   return error;
 }
 
-async function request<T>(path: string): Promise<T> {
+// Called when the API answers 401 to a signed-in request: the session ended or expired.
+let unauthorizedHandler: (() => void) | null = null;
+
+export function onUnauthorized(handler: (() => void) | null): void {
+  unauthorizedHandler = handler;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}${path}`);
+    // The session is an HttpOnly cookie, sent with every request to the API.
+    response = await fetch(`${API_BASE_URL}${path}`, { credentials: "include", ...init });
   } catch {
     throw failed(
       path,
@@ -51,6 +59,9 @@ async function request<T>(path: string): Promise<T> {
 
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as ErrorBody | null;
+    if (response.status === 401 && !path.startsWith("/api/auth/")) {
+      unauthorizedHandler?.();
+    }
     throw failed(
       path,
       new ApiError(body?.error?.message ?? `Request failed with status ${response.status}`, {
@@ -61,7 +72,31 @@ async function request<T>(path: string): Promise<T> {
     );
   }
 
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
+}
+
+export interface SignedInUser {
+  email: string;
+  tenant_id: string;
+  tenant_name: string;
+}
+
+export function signIn(email: string, password: string): Promise<SignedInUser> {
+  return request<SignedInUser>("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export function signOut(): Promise<void> {
+  return request<void>("/api/auth/logout", { method: "POST" });
+}
+
+// The signed-in user, or an ApiError with status 401 when there is no session.
+export function getMe(): Promise<SignedInUser> {
+  return request<SignedInUser>("/api/auth/me");
 }
 
 export function getHealth(): Promise<Health> {
