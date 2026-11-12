@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Query
 
 from app.api.browse import TenantDb
+from app.api.dependencies import CurrentUser
 from app.api.pagination import PageParams
 from app.models import MatchCandidate, SourceRecord
 from app.models.resolution import CANDIDATE_STATUSES
@@ -21,7 +22,7 @@ from app.schemas.organizations import (
     TimelineEntryOut,
 )
 from app.schemas.pagination import Page
-from app.services import browse
+from app.services import browse, review
 from app.services import organization_views as views
 
 router = APIRouter(prefix="/api/tenants", tags=["organizations"])
@@ -147,7 +148,7 @@ def duplicate_candidates(
 ):
     """Pairs of records that may be the same organization, set aside for review."""
     browse.get_tenant(db, tenant_id)
-    rows, total = views.match_candidates(db, tenant_id, paging, status=status)
+    rows, total = review.review_queue(db, tenant_id, paging, status=status)
     return Page(
         items=[candidate_out(candidate, left, right) for candidate, left, right in rows],
         total=total,
@@ -166,7 +167,45 @@ def candidate_out(
         left=ref(left),
         right=ref(right),
         matched_fields=candidate.matched_fields,
+        left_values=review.record_values(left),
+        right_values=review.record_values(right),
+        decided_by=candidate.decided_by,
+        decided_at=candidate.decided_at,
     )
+
+
+@router.post(
+    "/{tenant_id}/duplicates/candidates/{candidate_id}/accept", response_model=MatchCandidateOut
+)
+def accept_candidate(
+    tenant_id: uuid.UUID, candidate_id: uuid.UUID, db: TenantDb, user: CurrentUser
+):
+    """Put both records in one organization, recorded as decided by the signed-in user."""
+    row = review.accept(db, tenant_id, candidate_id, user.email)
+    db.commit()
+    return candidate_out(*row)
+
+
+@router.post(
+    "/{tenant_id}/duplicates/candidates/{candidate_id}/reject", response_model=MatchCandidateOut
+)
+def reject_candidate(
+    tenant_id: uuid.UUID, candidate_id: uuid.UUID, db: TenantDb, user: CurrentUser
+):
+    """Keep both records apart; matching will not propose the pair again."""
+    row = review.reject(db, tenant_id, candidate_id, user.email)
+    db.commit()
+    return candidate_out(*row)
+
+
+@router.post(
+    "/{tenant_id}/duplicates/candidates/{candidate_id}/undo", response_model=MatchCandidateOut
+)
+def undo_candidate(tenant_id: uuid.UUID, candidate_id: uuid.UUID, db: TenantDb):
+    """Reverse an accept or a reject and put the pair back in the queue."""
+    row = review.undo(db, tenant_id, candidate_id)
+    db.commit()
+    return candidate_out(*row)
 
 
 @router.get("/{tenant_id}/duplicates/groups", response_model=Page[OrganizationOut])

@@ -63,6 +63,13 @@ class TimelineEntryOut(BaseModel):
     changed_fields: dict[str, Any]
 
 
+class FieldValueOut(BaseModel):
+    field: str
+    # As stored in the source, and as PULSE normalized it for matching.
+    value: str | None
+    normalized: str | None
+
+
 class MatchCandidateOut(BaseModel):
     id: uuid.UUID
     score: float
@@ -70,3 +77,7 @@ class MatchCandidateOut(BaseModel):
     left: RecordRef
     right: RecordRef
     matched_fields: list[dict[str, Any]]
+    left_values: list[FieldValueOut] = []
+    right_values: list[FieldValueOut] = []
+    decided_by: str | None = None
+    decided_at: datetime | None = None

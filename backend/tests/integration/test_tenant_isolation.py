@@ -15,12 +15,12 @@ import pytest
 from sqlalchemy import select
 
 from app.core.errors import NotFoundError
-from app.core.tenancy import bound_to_tenant
+from app.core.tenancy import bound_to_tenant, system_access
 from app.ingestion.omerlo.connector import OmerloConnector
 from app.main import app
-from app.models import Organization, Source, SourceRecord, SyncRun, Tenant
+from app.models import MatchCandidate, Organization, Source, SourceRecord, SyncRun, Tenant
 from app.processing.entity_resolution import match_organizations
-from app.services import browse, organization_views, record_changes, source_records
+from app.services import browse, organization_views, record_changes, review, source_records
 from app.services.pagination import Paging
 from app.services.sync_runs import OmerloReader, run_sync
 from app.storage.raw_records import read_run
@@ -46,6 +46,9 @@ TENANT_ROUTES = {
     "/api/tenants/{tenant_id}/organizations/{organization_id}/timeline",
     "/api/tenants/{tenant_id}/duplicates/candidates",
     "/api/tenants/{tenant_id}/duplicates/groups",
+    "/api/tenants/{tenant_id}/duplicates/candidates/{candidate_id}/accept",
+    "/api/tenants/{tenant_id}/duplicates/candidates/{candidate_id}/reject",
+    "/api/tenants/{tenant_id}/duplicates/candidates/{candidate_id}/undo",
 }
 
 
@@ -202,6 +205,27 @@ def test_another_tenants_organization_is_not_found(api, session, pair, suffix):
     assert response.status_code == 404
 
 
+@pytest.mark.parametrize("action", ["accept", "reject", "undo"])
+def test_another_tenants_candidate_cannot_be_decided(api, session, pair, action):
+    # Arrange
+    reader, other = pair
+    with system_access(session):
+        candidate = session.scalar(
+            select(MatchCandidate).where(MatchCandidate.tenant_id == other.tenant.id)
+        ) or pytest.skip("the other tenant has no candidate")
+        before = candidate.status
+
+    # Act
+    path = f"/api/tenants/{reader.tenant.id}/duplicates/candidates/{candidate.id}/{action}"
+    response = api.post(path)
+
+    # Assert
+    assert response.status_code == 404
+    session.expire_all()
+    with system_access(session):
+        assert session.get(MatchCandidate, candidate.id).status == before
+
+
 def test_search_finds_nothing_of_the_other_tenant(api, pair):
     # Arrange
     reader, other = pair
@@ -258,7 +282,7 @@ def test_browse_services_see_nothing_of_the_other_tenant(session, pair):
         assert organization_views.organization_timeline(
             session, tenant_id, organization_id, page
         ) == ([], 0)
-        assert organization_views.match_candidates(session, tenant_id, page) == ([], 0)
+        assert review.review_queue(session, tenant_id, page) == ([], 0)
         assert organization_views.matched_groups(session, tenant_id, page) == ([], 0)
         with pytest.raises(NotFoundError):
             organization_views.get_organization(session, tenant_id, organization_id)

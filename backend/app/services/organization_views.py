@@ -10,10 +10,10 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import ColumnElement, case, func, select, tuple_
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session
 
 from app.core.errors import NotFoundError
-from app.models import MatchCandidate, Organization, OrgLink, RecordChange, SourceRecord, SyncRun
+from app.models import Organization, OrgLink, RecordChange, SourceRecord, SyncRun
 from app.services.organizations import surviving_organization
 from app.services.pagination import Paging
 
@@ -203,33 +203,6 @@ def organization_timeline(
         select(func.count(RecordChange.id)).join(SourceRecord, on_version).where(*where)
     )
     return [(change, record, started) for change, record, started in rows], total or 0
-
-
-def match_candidates(
-    session: Session, tenant_id: uuid.UUID, paging: Paging, *, status: str = "pending"
-) -> tuple[list[tuple[MatchCandidate, SourceRecord, SourceRecord]], int]:
-    """Possible matches set aside for review, highest score first, with both records."""
-    left, right = aliased(SourceRecord), aliased(SourceRecord)
-    where = (MatchCandidate.tenant_id == tenant_id, MatchCandidate.status == status)
-    rows = session.execute(
-        select(MatchCandidate, left, right)
-        .join(
-            left,
-            (left.tenant_id == MatchCandidate.tenant_id)
-            & (left.id == MatchCandidate.left_record_id),
-        )
-        .join(
-            right,
-            (right.tenant_id == MatchCandidate.tenant_id)
-            & (right.id == MatchCandidate.right_record_id),
-        )
-        .where(*where)
-        .order_by(MatchCandidate.score.desc(), MatchCandidate.id)
-        .limit(paging.page_size)
-        .offset(paging.offset)
-    ).all()
-    total = session.scalar(select(func.count(MatchCandidate.id)).where(*where))
-    return [(c, lr, rr) for c, lr, rr in rows], total or 0
 
 
 def matched_groups(
