@@ -1,0 +1,18 @@
+# People follow organizations in every sector: no planted gap.
+seed = 490
+organizations = 120
+people = 300
+locales = ["fr"]
+
+[sectors]
+"23" = 0.10
+"44-45" = 0.15
+"54" = 0.20
+"62" = 0.15
+"71" = 0.10
+"72" = 0.15
+"81" = 0.15
+
+[duplicates]
+organizations = 0.12
+people = 0.04

@@ -311,3 +311,39 @@ two syncs, and run the migration down and up.
   organizations through a fuzzy-linked member, in one sync or two, that a
   Tier 1 record could be saved with a fuzzy link when the fuzzy record had the
   smallest id, and that equal scores were decided by id order. Each has a test.
+
+### Synthetic data pipeline into Omerlo staging (#148)
+
+Claude Code wrote the mixer, the sector-aware generation, the Omerlo sink with
+its tenant guard, retries and report, the three writers (API, external command,
+in-memory fake), the command and the tests. It also looked up the staging ids
+in the CMS and the API, and added the API key's account to the workspace and
+the Employeur block to the Personnes profile type at the author's request.
+
+**Verification:** unit tests with the in-memory writer cover the creation order,
+retries, rejections and the reasons reported, a second run creating nothing,
+records without our external id left alone, the dry run, every guard case and
+an auth error stopping the run. The HTTP writer is tested against mocked routes.
+A test checks that every planned organization name classifies to its planned
+sector, and the default generator output was compared byte for byte before and
+after the refactor. On staging, a 2 organization smoke mix was written, then run
+twice more to check the links and that a rerun creates nothing; then the
+`sector_gaps` mix (134 organizations, 312 people, 312 links) was written with no
+rejection. Reading it back, every record had its external id, every person the
+planned employer, and the sector shares matched the plan.
+
+**Problems found:**
+- Omerlo requires social links without a scheme (`www.linkedin.com/...`) while
+  the generator writes `https://`. The payload builder strips it and refuses
+  any other prefix before sending.
+- The staging tenant allows French only, so a mix sets `locales` and the guard
+  refuses a plan with other locales.
+- The API key's account (a personal one) was not a member of the workspace, so it saw
+  no workspace at all; it is now a member.
+- The first smoke run created its records, then Omerlo refused their metadata:
+  keys must be declared on the profile type first. The keys were added in the
+  CMS, the 4 records tagged by hand, and the run now stops at the first refused
+  metadata instead of leaving more untagged records behind.
+- Staging sends `meta.next` as a path from the host, which the shared
+  pagination helper sent back as a cursor, so every list longer than one page
+  failed with a 500. The helper now follows the path.
