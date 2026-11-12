@@ -19,12 +19,13 @@ from app.ingestion.files.mapping import map_rows
 from app.ingestion.mapped import MappingResult
 from app.ingestion.omerlo.connector import OmerloConnector
 from app.ingestion.omerlo.mapping.batch import map_records
-from app.models import Source, SourceRecord, SyncRun
+from app.models import SectorMixResult, Source, SourceRecord, SyncRun
 from app.processing.entity_resolution import MatchResult, match_organizations
 from app.processing.person_resolution import match_people
 from app.services.industry import ClassificationReport, classify_organizations
 from app.services.link_recheck import LINK_RECHECK_KEY, RecheckResult, recheck_links
 from app.services.record_changes import record_changes
+from app.services.sector_mix import measure_sector_mix
 from app.services.source_records import (
     close_deleted,
     close_dropped_children,
@@ -49,6 +50,8 @@ WorkspaceWatermarks = dict[str, dict[str, datetime]]
 ChangeDetector = Callable[[Session, SyncRun], dict[str, int]]
 # Classifies the tenant's organizations in the caller's transaction after a successful run.
 Classifier = Callable[[Session, uuid.UUID], ClassificationReport]
+# Computes and stores the tenant's sector mix for the run, after classification.
+MixMeasurer = Callable[[Session, SyncRun], SectorMixResult]
 # Drops automatic org links whose evidence failed after versioning carried them.
 Rechecker = Callable[[Session, SyncRun, list[tuple[uuid.UUID, uuid.UUID]]], RecheckResult]
 
@@ -119,6 +122,7 @@ def run_sync(
     detect_changes: ChangeDetector = record_changes,
     recheck: Rechecker | None = None,
     classify: Classifier | None = None,
+    measure: MixMeasurer | None = None,
     now: Callable[[], datetime] = utc_now,
 ) -> SyncRun:
     """Run one sync of `source` and return its sync_run, committed whatever the outcome.
@@ -173,6 +177,10 @@ def run_sync(
         if run.status == "succeeded":
             match_after_sync(session, run)
             classify_after_sync(session, run, classify or classify_organizations)
+            # Measured even when classification failed, from the sectors already stored.
+            after_sync(
+                session, run, "sector mix", lambda: (measure or measure_sector_mix)(session, run)
+            )
         # Loaded while still bound, so callers can read the run after the scope ends.
         session.refresh(run)
         return run
@@ -248,21 +256,33 @@ def match_after_sync(session: Session, run: SyncRun) -> MatchResult | None:
 
 def classify_after_sync(session: Session, run: SyncRun, classify: Classifier) -> None:
     """Classify the tenant's organizations; a failure is logged and leaves the run as it is."""
+    report = after_sync(
+        session, run, "industry classification", lambda: classify(session, run.tenant_id)
+    )
+    if report is not None:
+        logger.info(
+            "organizations classified",
+            extra={
+                "sync_run_id": str(run.id),
+                "classified": report.classified,
+                "unclassified": report.unclassified,
+            },
+        )
+
+
+def after_sync[T](session: Session, run: SyncRun, name: str, step: Callable[[], T]) -> T | None:
+    """Run one step after a successful sync in its own transaction.
+
+    A failure is rolled back and logged, and leaves the run succeeded: its records are stored.
+    """
     try:
-        report = classify(session, run.tenant_id)
+        result = step()
         session.commit()
     except Exception:
         session.rollback()
-        logger.exception("industry classification failed", extra={"sync_run_id": str(run.id)})
-        return
-    logger.info(
-        "organizations classified",
-        extra={
-            "sync_run_id": str(run.id),
-            "classified": report.classified,
-            "unclassified": report.unclassified,
-        },
-    )
+        logger.exception("%s failed", name, extra={"sync_run_id": str(run.id)})
+        return None
+    return result
 
 
 def fetch(connector: OmerloConnector, source: Source, *, full: bool) -> Fetched:

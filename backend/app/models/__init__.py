@@ -6,6 +6,7 @@ from app.models.industry import IndustryClassification
 from app.models.people import Person, PersonLink
 from app.models.records import RawRecord, SourceRecord
 from app.models.resolution import MatchCandidate, Organization, OrgLink
+from app.models.sector_mix import SectorMixResult
 from app.models.tenancy import Source, SyncRun, Tenant
 from app.models.users import User, UserSession
 
@@ -19,6 +20,7 @@ __all__ = [
     "PersonLink",
     "RawRecord",
     "RecordChange",
+    "SectorMixResult",
     "Source",
     "SourceRecord",
     "SyncRun",
