@@ -4,11 +4,19 @@ import uuid
 from fastapi.testclient import TestClient
 
 from app.api.browse import database as browse_database
+from app.api.dependencies import current_user
 from app.core import database
 from app.core.tenancy import TenantSession
 from app.main import app
 from app.models import SourceRecord
+from app.services.auth import SignedIn
 from app.services.browse import label
+
+TENANT = uuid.uuid4()
+
+
+def signed_in_to_tenant() -> SignedIn:
+    return SignedIn(user_id=uuid.uuid4(), tenant_id=TENANT, email="a@b.test", tenant_name="T")
 
 
 def record(kind: str, attributes: dict, name_normalized: str | None = "fallback") -> SourceRecord:
@@ -72,11 +80,12 @@ def test_endpoints_answer_503_without_a_database(monkeypatch):
 def test_unknown_kind_is_rejected():
     # Arrange
     app.dependency_overrides[browse_database] = TenantSession
+    app.dependency_overrides[current_user] = signed_in_to_tenant
     client = TestClient(app)
 
     # Act
     try:
-        response = client.get(f"/api/tenants/{uuid.uuid4()}/records", params={"kind": "subscriber"})
+        response = client.get(f"/api/tenants/{TENANT}/records", params={"kind": "subscriber"})
     finally:
         app.dependency_overrides.clear()
 
@@ -87,8 +96,9 @@ def test_unknown_kind_is_rejected():
 def test_overlong_external_id_is_rejected():
     # Arrange
     app.dependency_overrides[browse_database] = TenantSession
+    app.dependency_overrides[current_user] = signed_in_to_tenant
     client = TestClient(app)
-    path = f"/api/tenants/{uuid.uuid4()}/records/{uuid.uuid4()}/{'x' * 201}"
+    path = f"/api/tenants/{TENANT}/records/{uuid.uuid4()}/{'x' * 201}"
 
     # Act
     try:

@@ -12,10 +12,8 @@ import uuid
 from dataclasses import dataclass
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from app.api.browse import database
 from app.core.errors import NotFoundError
 from app.core.tenancy import bound_to_tenant
 from app.ingestion.omerlo.connector import OmerloConnector
@@ -26,6 +24,7 @@ from app.services import browse, organization_views, record_changes, source_reco
 from app.services.pagination import Paging
 from app.services.sync_runs import OmerloReader, run_sync
 from app.storage.raw_records import read_run
+from tests.integration.signin import signed_in_client
 from tests.integration.test_sync_runs import (  # noqa: F401
     Clock,
     archive,
@@ -93,11 +92,10 @@ def pair(request, synced) -> tuple[Synced, Synced]:
 
 
 @pytest.fixture
-def api(session):
-    app.dependency_overrides[database] = lambda: session
-    with TestClient(app) as c:
-        yield c
-    app.dependency_overrides.clear()
+def api(session, pair):
+    """The API, signed in as a user of the reading tenant."""
+    with signed_in_client(session, pair[0].tenant.id) as client:
+        yield client
 
 
 def other_only_id(reader: Synced, other: Synced) -> str:

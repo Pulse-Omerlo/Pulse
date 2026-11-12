@@ -2,17 +2,13 @@
 """Read-only endpoints for the sync runs page: runs, their changes and record history."""
 
 import uuid
-from collections.abc import Iterator
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Path, Query
-from sqlalchemy.exc import OperationalError
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Path, Query
 
+from app.api.dependencies import CurrentUser, Db, TenantDb, database, tenant_database
 from app.api.pagination import PageParams
-from app.core.database import DatabaseNotConfiguredError, get_db
-from app.core.errors import DatabaseUnavailableError
-from app.core.tenancy import bound_to_tenant, system_access
+from app.core.tenancy import system_access
 from app.models.changes import CHANGE_TYPES
 from app.models.records import ENTITY_KINDS
 from app.schemas.browse import (
@@ -30,35 +26,22 @@ from app.services import browse
 router = APIRouter(prefix="/api/tenants", tags=["browse"])
 
 
-def database() -> Iterator[Session]:
-    """A session, or a 503 when the database is not configured or cannot be reached."""
-    try:
-        yield from get_db()
-    except (DatabaseNotConfiguredError, OperationalError) as err:
-        raise DatabaseUnavailableError("Database unavailable") from err
+# Re-exported: routes and tests import these from here.
+__all__ = ["Db", "TenantDb", "database", "router", "tenant_database"]
 
-
-Db = Annotated[Session, Depends(database)]
-
-
-def tenant_database(tenant_id: uuid.UUID, db: Db) -> Iterator[Session]:
-    """The session bound to the tenant in the path, so no query can reach another tenant."""
-    with bound_to_tenant(db, tenant_id):
-        yield db
-
-
-TenantDb = Annotated[Session, Depends(tenant_database)]
 ChangeType = Annotated[str | None, Query(pattern="^(" + "|".join(CHANGE_TYPES) + ")$")]
 Kind = Annotated[str | None, Query(pattern="^(" + "|".join(ENTITY_KINDS) + ")$")]
 ExternalId = Annotated[str, Path(min_length=1, max_length=200)]
 
 
 @router.get("", response_model=list[TenantOut])
-def list_tenants(db: Db):
-    # Lists every tenant, so it needs system access; to restrict once users exist.
+def list_tenants(db: Db, user: CurrentUser):
+    """The tenants the signed-in user can open: their own."""
     with system_access(db):
         return [
-            TenantOut(id=t.id, name=t.name, slug=t.omerlo_media_id) for t in browse.list_tenants(db)
+            TenantOut(id=t.id, name=t.name, slug=t.omerlo_media_id)
+            for t in browse.list_tenants(db)
+            if t.id == user.tenant_id
         ]
 
 

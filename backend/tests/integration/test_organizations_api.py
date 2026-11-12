@@ -7,15 +7,13 @@
 from contextlib import contextmanager
 
 import pytest
-from fastapi.testclient import TestClient
 from sqlalchemy import event, func, select
 
-from app.api.browse import database
 from app.core.tenancy import bound_to_tenant
-from app.main import app
 from app.models import MatchCandidate, Organization, OrgLink, RecordChange, SourceRecord
 from app.processing.entity_resolution import match_organizations
 from synthetic.mutate import DEMO, apply_set
+from tests.integration.signin import signed_in_client
 from tests.integration.test_sync_runs import (  # noqa: F401
     archive,
     client,
@@ -29,11 +27,10 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def api(session):
-    app.dependency_overrides[database] = lambda: session
-    with TestClient(app) as c:
-        yield c
-    app.dependency_overrides.clear()
+def api(session, source):
+    """The API, signed in as a user of the synced tenant."""
+    with signed_in_client(session, source.tenant_id) as client:
+        yield client
 
 
 @pytest.fixture
