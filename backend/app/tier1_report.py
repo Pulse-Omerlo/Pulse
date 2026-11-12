@@ -8,9 +8,22 @@ from uuid import UUID
 from app.core.logging import configure_logging, get_logger
 from app.ingestion.mapped import clean_mapped
 from app.ingestion.omerlo.mapping.mappers import map_record
+from app.models import SourceRecord
 from app.processing.entity_resolution import blocked_matches, load_generic_domains
 from app.processing.fuzzy_config import load_fuzzy_config
-from app.processing.tier1_accuracy import combine, expected_pairs, predicted_pairs, score
+from app.processing.person_resolution import (
+    blocked_person_matches,
+    components,
+    conflicting_person_identifiers,
+)
+from app.processing.tier1_accuracy import (
+    ORGANIZATION_DUPLICATES,
+    PERSON_DUPLICATES,
+    combine,
+    expected_pairs,
+    predicted_pairs,
+    score,
+)
 from app.processing.tier2_accuracy import (
     RECORD_FIELDS,
     grouping,
@@ -45,11 +58,51 @@ def build_records(tenant_number, tenant_data):
     ]
 
 
+def build_person_records(tenant_number, tenant_data):
+    """Map one tenant's synthetic people to unsaved source records."""
+    mapped = []
+    for payload in tenant_data.resources["people"]:
+        metadata = tenant_data.metadata.get(payload["id"], [])
+        mapped.append(map_record("person", payload, metadata=metadata))
+    cleaned = clean_mapped(mapped)
+
+    # Offset ids so people never collide with organization UUID ints in the same tenant.
+    records = []
+    for number, record in enumerate(cleaned.records, start=1):
+        records.append(
+            SourceRecord(
+                id=UUID(int=tenant_number * 100000 + 50000 + number),
+                tenant_id=UUID(int=tenant_number),
+                source_id=UUID(int=tenant_number),
+                kind="person",
+                external_id=record.external_id,
+                external_ids=record.external_ids,
+                attributes=record.attributes,
+                name_normalized=record.name_normalized,
+                linkedin=record.linkedin,
+            )
+        )
+    return records
+
+
 def tier1_groups(records):
     """Groups of external ids that Tier 1 would link to one organization."""
     # The same plan as the matcher, so conflicting links are cut here too.
     found = grouping(records, blocked_matches(records, load_generic_domains()))
     return [set(group) for group in found.groups]
+
+
+def tier1_person_groups(records):
+    """Groups of external ids that Tier 1 would link to one person."""
+    by_id = {record.id: record for record in records}
+    matches = blocked_person_matches(records)
+    groups = []
+    for group in components(matches):
+        group_records = [by_id[record_id] for record_id in group]
+        if conflicting_person_identifiers(group_records):
+            continue
+        groups.append({record.external_id for record in group_records})
+    return groups
 
 
 def score_tenant(records, expected, config):
@@ -63,6 +116,13 @@ def score_tenant(records, expected, config):
     }
 
 
+def score_people(tenant_number, tenant_data):
+    records = build_person_records(tenant_number, tenant_data)
+    expected = expected_pairs(tenant_data.ground_truth, key=PERSON_DUPLICATES)
+    predicted = predicted_pairs(tier1_person_groups(records))
+    return score(expected, predicted)
+
+
 def tenant_datasets(seed, hard, config):
     """(slug, records, expected pairs) for each synthetic tenant."""
     datasets = []
@@ -72,7 +132,11 @@ def tenant_datasets(seed, hard, config):
         if hard:
             records = hard_variant(records, tenant_data.ground_truth, seed, config.generic_tokens)
         datasets.append(
-            (tenant_data.tenant.slug, records, expected_pairs(tenant_data.ground_truth))
+            (
+                tenant_data.tenant.slug,
+                records,
+                expected_pairs(tenant_data.ground_truth, key=ORGANIZATION_DUPLICATES),
+            )
         )
     return datasets
 
@@ -98,11 +162,36 @@ def log_score(tenant, result, event="tier1_score", **fields):
     )
 
 
-def log_wrong_pairs(tenant, result, tier="tier1"):
+def log_wrong_pairs(tenant, result, tier="tier1", **fields):
     for pair in result["false_positive_pairs"]:
-        logger.warning(f"{tier}_false_positive", tenant=tenant, left=pair[0], right=pair[1])
+        logger.warning(
+            f"{tier}_false_positive",
+            tenant=tenant,
+            left=pair[0],
+            right=pair[1],
+            **fields,
+        )
     for pair in result["false_negative_pairs"]:
-        logger.warning(f"{tier}_false_negative", tenant=tenant, left=pair[0], right=pair[1])
+        logger.warning(
+            f"{tier}_false_negative",
+            tenant=tenant,
+            left=pair[0],
+            right=pair[1],
+            **fields,
+        )
+
+
+def report_people(seed):
+    """Tier 1 people score for each synthetic tenant (no Tier 2 yet)."""
+    people_scores = []
+    tenants = OmerloFixtureGenerator(seed).generate()
+    for tenant_number, tenant_data in enumerate(tenants, start=1):
+        slug = tenant_data.tenant.slug
+        result = score_people(tenant_number, tenant_data)
+        people_scores.append(result)
+        log_score(slug, result, kind="person")
+        log_wrong_pairs(slug, result, kind="person")
+    log_score("all", combine(people_scores), kind="person")
 
 
 def report(datasets, config):
@@ -112,12 +201,12 @@ def report(datasets, config):
         tier1, both = score_tenant(records, expected, config)
         tier1_scores.append(tier1)
         tier2_scores.append(both)
-        log_score(slug, tier1)
-        log_wrong_pairs(slug, tier1)
-        log_score(slug, both, "tier2_score")
-        log_wrong_pairs(slug, both, "tier2")
-    log_score("all", combine(tier1_scores))
-    log_score("all", combine_tier2(tier2_scores), "tier2_score")
+        log_score(slug, tier1, kind="organization")
+        log_wrong_pairs(slug, tier1, kind="organization")
+        log_score(slug, both, "tier2_score", kind="organization")
+        log_wrong_pairs(slug, both, "tier2", kind="organization")
+    log_score("all", combine(tier1_scores), kind="organization")
+    log_score("all", combine_tier2(tier2_scores), "tier2_score", kind="organization")
 
 
 def sweep(datasets, config):
@@ -125,7 +214,13 @@ def sweep(datasets, config):
     for threshold in SWEEP_THRESHOLDS:
         candidate = replace(config, threshold=threshold)
         scores = [score_tenant(records, truth, candidate)[1] for _, records, truth in datasets]
-        log_score("all", combine_tier2(scores), "tier2_threshold", threshold=threshold)
+        log_score(
+            "all",
+            combine_tier2(scores),
+            "tier2_threshold",
+            threshold=threshold,
+            kind="organization",
+        )
 
 
 def main(argv=None):
@@ -153,6 +248,7 @@ def main(argv=None):
         sweep(datasets, config)
     else:
         report(datasets, config)
+        report_people(args.seed)
 
 
 if __name__ == "__main__":

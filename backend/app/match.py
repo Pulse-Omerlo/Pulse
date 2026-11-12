@@ -10,13 +10,14 @@ from app.core.logging import configure_logging, get_logger
 from app.core.tenancy import bound_to_tenant, system_access
 from app.models import SyncRun
 from app.processing.entity_resolution import MatchResult, match_organizations
+from app.processing.person_resolution import PersonMatchResult, match_people
 from app.services.sync_runs import match_after_sync
 from app.sync import SyncCommandError, find_tenant
 
 logger = get_logger(__name__)
 
 
-def log_summary(tenant_id: uuid.UUID, result: MatchResult) -> None:
+def log_org_summary(tenant_id: uuid.UUID, result: MatchResult) -> None:
     logger.info(
         "organization_matching_completed",
         tenant_id=str(tenant_id),
@@ -27,15 +28,38 @@ def log_summary(tenant_id: uuid.UUID, result: MatchResult) -> None:
     )
 
 
-def match_tenant(session, tenant: str) -> MatchResult:
-    """Match every current organization of the tenant."""
+def log_people_summary(tenant_id: uuid.UUID, result: PersonMatchResult) -> None:
+    logger.info(
+        "people_matching_completed",
+        tenant_id=str(tenant_id),
+        people_created=result.people_created,
+        people_merged=result.people_merged,
+        links_created=result.links_created,
+        candidates_created=result.candidates_created,
+    )
+
+
+def match_tenant(session, tenant: str) -> tuple[MatchResult, PersonMatchResult]:
+    """Match every current organization and person of the tenant.
+
+    Organizations commit first so a people failure cannot roll them back.
+    """
     with system_access(session):
         tenant_id = find_tenant(session, tenant).id
     with bound_to_tenant(session, tenant_id):
-        result = match_organizations(session, tenant_id)
+        org_result = match_organizations(session, tenant_id)
         session.commit()
-    log_summary(tenant_id, result)
-    return result
+    log_org_summary(tenant_id, org_result)
+
+    try:
+        with bound_to_tenant(session, tenant_id):
+            people_result = match_people(session, tenant_id)
+            session.commit()
+    except Exception as error:
+        session.rollback()
+        raise SyncCommandError(f"People matching failed: {error}") from error
+    log_people_summary(tenant_id, people_result)
+    return org_result, people_result
 
 
 def match_run(session, run_id: uuid.UUID) -> MatchResult:
@@ -47,19 +71,31 @@ def match_run(session, run_id: uuid.UUID) -> MatchResult:
     if run.status != "succeeded":
         raise SyncCommandError(f"Sync run {run_id} did not succeed; nothing to match")
 
-    # Saved before matching: the run is reloaded after the commit, which needs the tenant.
     tenant_id = run.tenant_id
     with bound_to_tenant(session, tenant_id):
         result = match_after_sync(session, run)
+        people = (run.counts or {}).get("matching_people") or {}
+        if result is not None:
+            log_org_summary(tenant_id, result)
         if result is None:
             raise SyncCommandError(f"Matching failed: {run.counts['matching']['error']}")
-    log_summary(tenant_id, result)
+        if "error" in people:
+            raise SyncCommandError(f"People matching failed: {people['error']}")
+        log_people_summary(
+            tenant_id,
+            PersonMatchResult(
+                people_created=people.get("people_created", 0),
+                people_merged=people.get("people_merged", 0),
+                links_created=people.get("links_created", 0),
+                candidates_created=people.get("candidates_created", 0),
+            ),
+        )
     return result
 
 
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
-        description="Match current organization records using Tier 1 rules."
+        description="Match current organization and person records using Tier 1 rules."
     )
     parser.add_argument("--tenant", help="tenant UUID or Omerlo media slug")
     parser.add_argument(
@@ -68,7 +104,6 @@ def main(argv: Sequence[str] | None = None) -> None:
         help="sync run UUID: match the records it created or changed again",
     )
     args = parser.parse_args(argv)
-    # Exactly one of the two options must be given.
     if (args.tenant is None) == (args.sync_run is None):
         parser.error("give either --tenant or --sync-run")
     configure_logging()

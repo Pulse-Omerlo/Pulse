@@ -19,6 +19,8 @@ from app.models import (
     MatchCandidate,
     Organization,
     OrgLink,
+    Person,
+    PersonLink,
     RawRecord,
     RecordChange,
     Source,
@@ -49,19 +51,24 @@ def add_graph(session, name: str) -> Graph:
     run = SyncRun(tenant_id=tid, source_id=source.id)
     session.add(run)
     session.flush()
-    first, second = (
+    first, second, person_record = (
         SourceRecord(
             tenant_id=tid,
             source_id=source.id,
             external_id=external_id,
-            kind="organization",
+            kind=kind,
             first_seen_run=run.id,
             last_seen_run=run.id,
         )
-        for external_id in ("org-1", "org-2")
+        for external_id, kind in (
+            ("org-1", "organization"),
+            ("org-2", "organization"),
+            ("person-1", "person"),
+        )
     )
     organization = Organization(tenant_id=tid, display_name=f"{name} inc.")
-    session.add_all([first, second, organization])
+    person = Person(tenant_id=tid, display_name=f"{name} person")
+    session.add_all([first, second, person_record, organization, person])
     session.flush()
     left, right = sorted([first.id, second.id])
     rows = {
@@ -69,6 +76,7 @@ def add_graph(session, name: str) -> Graph:
         SyncRun: run,
         SourceRecord: first,
         Organization: organization,
+        Person: person,
         RawRecord: RawRecord(
             tenant_id=tid,
             sync_run_id=run.id,
@@ -87,6 +95,14 @@ def add_graph(session, name: str) -> Graph:
             method="domain",
             confidence=1.0,
             decided_by="tier1:domain",
+        ),
+        PersonLink: PersonLink(
+            tenant_id=tid,
+            person_id=person.id,
+            source_record_id=person_record.id,
+            method="email",
+            confidence=1.0,
+            decided_by="tier1:email",
         ),
         MatchCandidate: MatchCandidate(
             tenant_id=tid, left_record_id=left, right_record_id=right, score=0.7
@@ -129,9 +145,11 @@ def test_the_graph_has_a_row_in_every_tenant_owned_table():
         SyncRun,
         SourceRecord,
         Organization,
+        Person,
         RawRecord,
         RecordChange,
         OrgLink,
+        PersonLink,
         MatchCandidate,
         IndustryClassification,
     }
@@ -203,8 +221,8 @@ def test_counts_and_joins_are_scoped(session, tenant_a, tenant_b):
             )
         ).all()
 
-    # Assert
-    assert count == 2
+    # Assert: two orgs plus one person in add_graph.
+    assert count == 3
     assert [change.tenant_id for change, _ in joined] == [tenant_a.tenant.id]
 
 

@@ -28,7 +28,7 @@ from app.processing.normalization import (
     normalize_text,
 )
 
-PERSON_IDENTIFIERS = ("emails", "linkedin")
+PERSON_IDENTIFIERS = ("emails", "phones", "linkedin")
 
 
 def map_organization(payload: dict[str, Any]) -> MappedRecord:

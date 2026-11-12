@@ -21,6 +21,7 @@ from app.ingestion.omerlo.connector import OmerloConnector
 from app.ingestion.omerlo.mapping.batch import map_records
 from app.models import Source, SourceRecord, SyncRun
 from app.processing.entity_resolution import MatchResult, match_organizations
+from app.processing.person_resolution import match_people
 from app.services.industry import ClassificationReport, classify_organizations
 from app.services.link_recheck import LINK_RECHECK_KEY, RecheckResult, recheck_links
 from app.services.record_changes import record_changes
@@ -179,19 +180,29 @@ def run_sync(
 
 def changed_organization_ids(session: Session, run: SyncRun) -> set[uuid.UUID]:
     """Ids of the current organization versions this run created (new or changed records)."""
+    return changed_record_ids(session, run, "organization")
+
+
+def changed_person_ids(session: Session, run: SyncRun) -> set[uuid.UUID]:
+    """Ids of the current person versions this run created (new or changed records)."""
+    return changed_record_ids(session, run, "person")
+
+
+def changed_record_ids(session: Session, run: SyncRun, kind: str) -> set[uuid.UUID]:
     query = select(SourceRecord.id).where(
         SourceRecord.tenant_id == run.tenant_id,
         SourceRecord.first_seen_run == run.id,
-        SourceRecord.kind == "organization",
+        SourceRecord.kind == kind,
         SourceRecord.valid_to.is_(None),
     )
     return set(session.scalars(query))
 
 
 def match_after_sync(session: Session, run: SyncRun) -> MatchResult | None:
-    """Match the run's new and changed organizations and save the counts on the run.
+    """Match the run's new and changed orgs, then people, and save counts on the run.
 
-    If matching fails, the error is saved on the run and the stored records are kept.
+    Organization and people matching each get their own try/commit so a people failure
+    cannot roll back org matches or wipe org counts. Stored records are kept either way.
     """
     result = None
     try:
@@ -209,9 +220,27 @@ def match_after_sync(session: Session, run: SyncRun) -> MatchResult | None:
         logger.exception("organization matching failed", extra={"sync_run_id": str(run.id)})
         matching_counts = {"error": describe(error)}
 
-    # Copy the counts into a new dict, otherwise the JSON column is not saved.
     counts = dict(run.counts or {})
     counts["matching"] = matching_counts
+    run.counts = counts
+    session.commit()
+
+    try:
+        people_result = match_people(session, run.tenant_id, changed_person_ids(session, run))
+        people_counts = {
+            "people_created": people_result.people_created,
+            "people_merged": people_result.people_merged,
+            "links_created": people_result.links_created,
+            "candidates_created": people_result.candidates_created,
+        }
+        logger.info("people matched", extra={"sync_run_id": str(run.id)})
+    except Exception as error:
+        session.rollback()
+        logger.exception("people matching failed", extra={"sync_run_id": str(run.id)})
+        people_counts = {"error": describe(error)}
+
+    counts = dict(run.counts or {})
+    counts["matching_people"] = people_counts
     run.counts = counts
     session.commit()
     return result

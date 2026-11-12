@@ -284,25 +284,52 @@ def test_query_cannot_switch_an_already_bound_tenant(session):
 
 def test_command_commits_and_logs_summary(mocker, session, capsys):
     # Arrange
+    from app.processing.person_resolution import PersonMatchResult
+
     session.__enter__.return_value = session
     mocker.patch.object(command, "get_session_factory", return_value=lambda: session)
     mocker.patch.object(command, "find_tenant", return_value=Tenant(id=TENANT))
     matcher = mocker.patch.object(
         command, "match_organizations", return_value=er.MatchResult(1, 2, 3, 4)
     )
+    people = mocker.patch.object(
+        command, "match_people", return_value=PersonMatchResult(1, 2, 0, 1)
+    )
     # Act
     command.main(["--tenant", "demo-capitale"])
     # Assert
     matcher.assert_called_once_with(session, TENANT)
-    session.commit.assert_called_once()
-    summary = json.loads(capsys.readouterr().out)
-    assert summary["event"] == "organization_matching_completed"
-    assert summary["module"] == "app.match"
-    assert summary["tenant_id"] == str(TENANT)
-    assert summary["organizations_created"] == 1
-    assert summary["links_created"] == 2
-    assert summary["candidates_created"] == 3
-    assert summary["organizations_merged"] == 4
+    people.assert_called_once_with(session, TENANT)
+    assert session.commit.call_count == 2
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert events[0]["event"] == "organization_matching_completed"
+    assert events[0]["organizations_created"] == 1
+    assert events[0]["links_created"] == 2
+    assert events[0]["candidates_created"] == 3
+    assert events[0]["organizations_merged"] == 4
+    assert events[1]["event"] == "people_matching_completed"
+    assert events[1]["people_created"] == 1
+
+
+def test_command_keeps_org_commit_when_people_matching_fails(mocker, session, capsys):
+    # Arrange
+    session.__enter__.return_value = session
+    mocker.patch.object(command, "get_session_factory", return_value=lambda: session)
+    mocker.patch.object(command, "find_tenant", return_value=Tenant(id=TENANT))
+    mocker.patch.object(command, "match_organizations", return_value=er.MatchResult(1, 0, 0))
+    mocker.patch.object(command, "match_people", side_effect=ValueError("people blew up"))
+
+    # Act
+    with pytest.raises(SystemExit) as exit_info:
+        command.main(["--tenant", "demo-capitale"])
+    captured = capsys.readouterr()
+
+    # Assert
+    assert exit_info.value.code == 2
+    assert session.commit.call_count == 1
+    session.rollback.assert_called_once()
+    assert "People matching failed" in captured.err
+    assert "organization_matching_completed" in captured.out
 
 
 def test_command_unknown_tenant_does_not_commit(mocker, session, capsys):

@@ -32,7 +32,7 @@ from tests.synthetic.conftest import SMALL
         ("person", "locales[en].job_title", {"attributes.job_titles.en"}),
         ("person", "contact[fr].email", {"attributes.identifiers.emails"}),
         ("person", "contact[fr].linkedin", {"attributes.identifiers.linkedin", "linkedin"}),
-        ("person", "contact[fr].phone", set()),
+        ("person", "contact[fr].phone", {"attributes.identifiers.phones"}),
     ],
 )
 def test_fixture_paths_translate_to_normalized_paths(kind, path, paths):

@@ -672,9 +672,11 @@ def test_match_command_reruns_a_sync_run(
     match_command.main(["--sync-run", str(run_id)])
 
     # Assert
-    lines = capsys.readouterr().out.splitlines()
-    summary = json.loads(lines[-1])
-    assert summary["event"] == "organization_matching_completed"
-    # The sync already matched everything, so the re-run creates nothing.
-    assert summary["links_created"] == 0
-    assert summary["organizations_created"] == 0
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines() if line.strip()]
+    by_name = {event["event"]: event for event in events}
+    # Orgs then people; the sync already matched everything, so the re-run creates nothing.
+    assert by_name["organization_matching_completed"]["links_created"] == 0
+    assert by_name["organization_matching_completed"]["organizations_created"] == 0
+    assert by_name["people_matching_completed"]["links_created"] == 0
+    assert by_name["people_matching_completed"]["people_created"] == 0
+    assert events[-1]["event"] == "people_matching_completed"
