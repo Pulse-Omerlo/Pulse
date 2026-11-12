@@ -111,7 +111,13 @@ def link(session: Session, record: SourceRecord) -> Organization:
     return organization
 
 
-def pair(session: Session, first: SourceRecord, second: SourceRecord, status: str) -> None:
+def pair(
+    session: Session,
+    first: SourceRecord,
+    second: SourceRecord,
+    status: str,
+    decided_by: str | None = None,
+) -> None:
     left, right = sorted([first.id, second.id])
     session.add(
         MatchCandidate(
@@ -121,6 +127,8 @@ def pair(session: Session, first: SourceRecord, second: SourceRecord, status: st
             score=0.8,
             matched_fields=["name"],
             status=status,
+            decided_by=decided_by,
+            decision={"linked": []} if decided_by else None,
         )
     )
     session.flush()
@@ -202,7 +210,7 @@ def test_a_new_version_keeps_the_organization_link_and_candidates(session, runs)
     one = version_as_of(session, first, "org-1")
     organization = link(session, one)
     pair(session, one, version_as_of(session, first, "org-2"), "rejected")
-    pair(session, one, version_as_of(session, first, "org-3"), "accepted")
+    pair(session, one, version_as_of(session, first, "org-3"), "accepted", "ana@pulse.test")
 
     # Act
     upsert_records(session, second, [org("org-1", name="nouveau nom")])
@@ -215,6 +223,13 @@ def test_a_new_version_keeps_the_organization_link_and_candidates(session, runs)
     assert (copied.method, copied.confidence, copied.decided_by) == ("domain", 0.9, "tier1:domain")
     assert session.get(OrgLink, one.id) is not None
     assert candidates(session) == {("org-1", "org-2", "rejected"), ("org-1", "org-3", "accepted")}
+    reviewed = session.scalar(
+        select(MatchCandidate).where(
+            MatchCandidate.status == "accepted",
+            (MatchCandidate.left_record_id == new.id) | (MatchCandidate.right_record_id == new.id),
+        )
+    )
+    assert (reviewed.decided_by, reviewed.decision) == ("ana@pulse.test", {"linked": []})
 
 
 def person_record(
