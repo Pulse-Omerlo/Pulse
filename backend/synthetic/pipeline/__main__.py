@@ -14,10 +14,12 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from app.core.logging import configure_logging, get_logger
 from app.ingestion.omerlo.client import OmerloAuthError, create_omerlo_client
 from app.ingestion.omerlo.settings import OmerloSettings
 from synthetic.pipeline.mixer import MixError, load_mix
 from synthetic.pipeline.plan import build_plan
+from synthetic.pipeline.report import RunReport
 from synthetic.pipeline.sinks.files import write_files
 from synthetic.pipeline.sinks.omerlo import OmerloSink, RunStopped, TenantGuardError
 from synthetic.pipeline.target import DEFAULT_TARGET, Target, load_target
@@ -34,6 +36,8 @@ EXIT_REFUSED = 2
 EXIT_AUTH = 3
 EXIT_STOPPED = 4
 
+logger = get_logger(__name__)
+
 
 def make_writer(kind: str, target: Target, cli_command: str | None) -> OmerloWriter:
     if kind == "cli":
@@ -44,6 +48,21 @@ def make_writer(kind: str, target: Target, cli_command: str | None) -> OmerloWri
     # The target decides the host, whatever OMERLO_BASE_URL says; only the key comes from env.
     settings = OmerloSettings(base_url=target.base_url)  # type: ignore[call-arg]
     return ApiWriter(create_omerlo_client(settings))
+
+
+def log_report(event: str, report: RunReport, reason: str | None = None) -> None:
+    """Each rejection as a warning, then the counts; a stopped run logs at error with why."""
+    for rejection in report.rejections:
+        logger.warning(
+            "record_rejected",
+            kind=rejection.kind,
+            external_id=rejection.external_id,
+            reason=rejection.reason,
+        )
+    if reason is None:
+        logger.info(event, **report.summary())
+    else:
+        logger.error(event, reason=reason, **report.summary())
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
@@ -63,14 +82,20 @@ def main(argv: list[str] | None = None, writer: OmerloWriter | None = None) -> i
     try:
         mix = load_mix(args.mix)
     except MixError as error:
-        print(f"{args.mix}: {error}", file=sys.stderr)
+        logger.error("mix_refused", mix=str(args.mix), reason=str(error))
         return EXIT_REFUSED
     plan = build_plan(mix)
 
     if args.sink == "files":
         folder = write_files(plan, args.out)
-        print(f"Wrote {len(plan.organizations)} organizations and {len(plan.people)} people")
-        print(f"to {folder} (mix {mix.name}, seed {mix.seed})")
+        logger.info(
+            "fixtures_written",
+            mix=mix.name,
+            seed=mix.seed,
+            folder=str(folder),
+            organizations=len(plan.organizations),
+            people=len(plan.people),
+        )
         return 0
 
     load_dotenv(ROOT_ENV)
@@ -79,19 +104,18 @@ def main(argv: list[str] | None = None, writer: OmerloWriter | None = None) -> i
     try:
         report = sink.run(plan, dry_run=args.dry_run)
     except TenantGuardError as error:
-        print(f"Refused, nothing was written: {error}", file=sys.stderr)
+        logger.error("omerlo_run_refused", reason=str(error))
         return EXIT_REFUSED
     except OmerloAuthError as error:
-        print(sink.report.format())
-        print(f"Stopped: {error}", file=sys.stderr)
+        log_report("omerlo_run_stopped", sink.report, str(error))
         return EXIT_AUTH
     except RunStopped as error:
-        print(sink.report.format())
-        print(f"Stopped: {error}", file=sys.stderr)
+        log_report("omerlo_run_stopped", sink.report, str(error))
         return EXIT_STOPPED
-    print(report.format())
+    log_report("omerlo_run_completed", report)
     return EXIT_REJECTIONS if report.rejections else 0
 
 
 if __name__ == "__main__":
+    configure_logging()
     sys.exit(main())

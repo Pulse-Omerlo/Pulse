@@ -1,7 +1,8 @@
 # AI contribution: 50% or more AI-generated
 """What a run did: counts per kind and every record Omerlo refused, with the reason."""
 
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from typing import Any
 
 LINKS = "links"
 
@@ -34,16 +35,9 @@ class RunReport:
         self.counts[kind].rejected += 1
         self.rejections.append(Rejection(kind, external_id, reason))
 
-    def format(self) -> str:
-        made = "to create" if self.dry_run else "created"
-        lines = ["dry run: nothing was written"] if self.dry_run else []
+    def summary(self) -> dict[str, Any]:
+        """The counts as flat log fields: `organizations_created`, `links_rejected`, ..."""
+        fields: dict[str, Any] = {"dry_run": self.dry_run, "untouched": self.untouched}
         for kind, counts in self.counts.items():
-            lines.append(
-                f"{kind:<14} {made} {counts.created:>4}  skipped {counts.skipped:>4}"
-                f"  rejected {counts.rejected:>4}"
-            )
-        lines.append(f"{'untouched':<14} {self.untouched} record(s) without our external id")
-        if self.rejections:
-            lines.append("rejected:")
-            lines.extend(f"  {r.external_id}  {r.reason}" for r in self.rejections)
-        return "\n".join(lines)
+            fields.update({f"{kind}_{name}": value for name, value in asdict(counts).items()})
+        return fields

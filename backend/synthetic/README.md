@@ -220,7 +220,9 @@ A missing metadata key shows as `400 metadata.key is invalid`. The run stops at 
 3. Creates organizations, then people, each followed by its metadata; then links each person to their employer through the Employeur block.
 4. Retries a refused write once, then reports it with Omerlo's reason and moves on. A 401 or 403 stops the run, and so does refused metadata (see above).
 
-Running it twice creates nothing the second time. `--dry-run` does steps 1 and 2 and prints what it would create.
+Running it twice creates nothing the second time. `--dry-run` does steps 1 and 2 and logs what it would create.
+
+The run logs JSON lines through `app.core.logging`: one `record_rejected` warning per refused record, then `omerlo_run_completed` with the counts (`organizations_created`, `links_rejected`, ...), or `omerlo_run_refused` / `omerlo_run_stopped` at error with the reason.
 
 `--writer api` (default) calls the backoffice API. `--writer cli --cli-command "..."` hands each call to an external command instead (for example a CLI with the Omerlo MCP): the command gets the operation name as its last argument and a JSON object on stdin, and prints `{"result": ...}` or `{"error": "...", "status": 400}`.
 
@@ -231,7 +233,7 @@ Exit codes: 0 when everything was written or skipped, 1 when some records were r
 Found while writing the first runs (November 2026):
 
 - **Metadata keys** must be declared on the profile type, as above.
-- **Validation errors** come back as `{"status": 400, "errors": {"metadata": [{"key": ["is invalid"]}]}}`, not as the documented `{"error": "..."}`. The run report flattens them to `metadata.key is invalid`.
+- **Validation errors** come back as `{"status": 400, "errors": {"metadata": [{"key": ["is invalid"]}]}}`, not as the documented `{"error": "..."}`. The writer flattens them to `metadata.key is invalid`.
 - **Pagination:** lists return 25 items by default. `meta.next` is a path from the host, `/api/community/v2/...?after=<cursor>&limit=...&sort_by=...`, that already carries the request's parameters; `app/ingestion/omerlo/pagination.py` follows it as is.
 - **Social links** are stored without a scheme (`www.linkedin.com/...`); the payload builder strips `https://`.
 - **A `{"data": [...]}` body on the metadata PUT** answers 200 and saves nothing: the body is the bare list of entries.
@@ -246,6 +248,6 @@ uv run python -m synthetic.viewer --fixtures synthetic/out/mixes/mix-sector-gaps
 uv run python -m synthetic.viewer --omerlo --mix synthetic/mixes/sector_gaps.toml         # the Omerlo test tenant
 ```
 
-Then open http://127.0.0.1:8200. The page only calls the viewer's own GET endpoints (`/api/summary`, `/api/sectors`, `/api/organizations?sector=`, `/api/people?sector=&employer=`, `/api/duplicates`, `/api/check`); the server reads the data once at start and binds to 127.0.0.1 only.
+Then open http://127.0.0.1:8200. The page only calls the viewer's own GET endpoints (`/api/summary`, `/api/sectors`, `/api/organizations?sector=`, `/api/people?sector=&employer=`, `/api/duplicates`, `/api/check`); the server binds to 127.0.0.1 only. **Sync** reads the data again, so a new run shows up without a restart; the page keeps the last data if a sync fails and shows why.
 
-With `--omerlo`, the viewer applies the pipeline's tenant guard, reads the workspace through the API key in `.env` (the key never reaches the browser), and keeps only records whose external id belongs to the mix. It reads each person's Employeur block, so the check shows people with no employer or the wrong one. Reading takes about three calls per person, so a full mix takes a minute or two to load. Without `--mix` there is no plan, so the gaps and the check are left out.
+With `--omerlo`, the viewer applies the pipeline's tenant guard, reads the workspace through the API key in `.env` (the key never reaches the browser), and keeps only records whose external id belongs to the mix. It reads each person's Employeur block, so the check shows people with no employer or the wrong one. Reading takes about three calls per person, so a full mix takes a minute or two. The page opens right away and fills in when the first read is done; each read is saved in `synthetic/out/viewer/` (one file per workspace and mix), so the next start shows the saved copy at once and **Sync** reads the tenant again. Without `--mix` there is no plan, so the gaps and the check are left out.

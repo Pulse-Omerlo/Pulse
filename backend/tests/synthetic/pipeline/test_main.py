@@ -41,26 +41,32 @@ def staging_writer():
     return FakeWriter((load_target().workspace_id,))
 
 
-def test_the_files_sink_writes_fixtures_for_the_mix(tmp_path, capsys):
+def entry(log_output, event):
+    return next(e for e in log_output() if e["event"] == event)
+
+
+def test_the_files_sink_writes_fixtures_for_the_mix(tmp_path, log_output):
     # Act
     code = main(["--mix", mix_file(tmp_path), "--out", str(tmp_path / "out")])
 
     # Assert
     assert code == 0
     assert (tmp_path / "out" / "mix-cli-test" / "organizations.json").exists()
-    assert "mix cli-test, seed 3" in capsys.readouterr().out
+    logged = entry(log_output, "fixtures_written")
+    assert (logged["mix"], logged["seed"], logged["organizations"]) == ("cli-test", 3, 6)
 
 
-def test_the_omerlo_sink_prints_the_report(tmp_path, capsys):
+def test_the_omerlo_sink_logs_the_report(tmp_path, log_output):
     # Act
     code = main(["--mix", mix_file(tmp_path), "--sink", "omerlo"], writer=staging_writer())
 
     # Assert
     assert code == 0
-    assert "organizations  created    6" in capsys.readouterr().out
+    logged = entry(log_output, "omerlo_run_completed")
+    assert (logged["level"], logged["organizations_created"]) == ("info", 6)
 
 
-def test_a_broken_mix_file_is_refused_with_its_reason(tmp_path, capsys):
+def test_a_broken_mix_file_is_refused_with_its_reason(tmp_path, log_output):
     # Arrange
     broken = MIX.replace('"72" = 1.0', '"72" = 0.5')
 
@@ -69,10 +75,10 @@ def test_a_broken_mix_file_is_refused_with_its_reason(tmp_path, capsys):
 
     # Assert
     assert code == EXIT_REFUSED
-    assert "sector shares sum to 0.5" in capsys.readouterr().err
+    assert "sector shares sum to 0.5" in entry(log_output, "mix_refused")["reason"]
 
 
-def test_a_guard_refusal_writes_nothing(tmp_path, capsys):
+def test_a_guard_refusal_writes_nothing(tmp_path, log_output):
     # Arrange
     writer = FakeWriter(("some-other-workspace",))
 
@@ -81,10 +87,10 @@ def test_a_guard_refusal_writes_nothing(tmp_path, capsys):
 
     # Assert
     assert code == EXIT_REFUSED
-    assert "Refused, nothing was written" in capsys.readouterr().err
+    assert entry(log_output, "omerlo_run_refused")["level"] == "error"
 
 
-def test_an_auth_error_prints_what_was_done_and_stops(tmp_path, capsys):
+def test_an_auth_error_logs_what_was_done_and_stops(tmp_path, log_output):
     # Arrange
     writer = staging_writer()
     writer.auth_error = True
@@ -94,12 +100,11 @@ def test_an_auth_error_prints_what_was_done_and_stops(tmp_path, capsys):
 
     # Assert
     assert code == EXIT_AUTH
-    captured = capsys.readouterr()
-    assert "organizations  created    0" in captured.out
-    assert "Stopped:" in captured.err
+    logged = entry(log_output, "omerlo_run_stopped")
+    assert (logged["level"], logged["organizations_created"]) == ("error", 0)
 
 
-def test_rejections_make_the_run_exit_with_one(tmp_path):
+def test_rejections_make_the_run_exit_with_one(tmp_path, log_output):
     # Arrange
     path = mix_file(tmp_path)
     first_org = build_plan(load_mix(Path(path))).organizations[0].record["name"]
@@ -111,6 +116,8 @@ def test_rejections_make_the_run_exit_with_one(tmp_path):
 
     # Assert
     assert code == EXIT_REJECTIONS
+    rejected = entry(log_output, "record_rejected")
+    assert (rejected["level"], rejected["kind"]) == ("warning", "organizations")
 
 
 def test_the_default_output_folder_leaves_the_demo_fixtures_alone():
@@ -122,7 +129,7 @@ def test_the_default_output_folder_leaves_the_demo_fixtures_alone():
     assert args.out.parent.name == "out"
 
 
-def test_a_stopped_run_prints_what_was_done_and_exits_with_four(tmp_path, capsys):
+def test_a_stopped_run_logs_what_was_done_and_exits_with_four(tmp_path, log_output):
     # Arrange
     writer = staging_writer()
 
@@ -136,6 +143,6 @@ def test_a_stopped_run_prints_what_was_done_and_exits_with_four(tmp_path, capsys
 
     # Assert
     assert code == EXIT_STOPPED
-    captured = capsys.readouterr()
-    assert "rejected    1" in captured.out
-    assert "tag or delete it before running again" in captured.err
+    logged = entry(log_output, "omerlo_run_stopped")
+    assert logged["organizations_rejected"] == 1
+    assert "tag or delete it before running again" in logged["reason"]

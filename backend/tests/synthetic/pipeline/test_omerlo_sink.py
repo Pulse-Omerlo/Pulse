@@ -189,7 +189,7 @@ def test_a_dry_run_reads_but_writes_nothing(writer, target, plan):
     assert writes(writer) == []
     assert report.counts[ORGANIZATIONS].created == len(plan.organizations)
     assert report.counts["links"].created == len(plan.people)
-    assert report.format().startswith("dry run: nothing was written")
+    assert report.summary()["dry_run"] is True
 
 
 @pytest.mark.parametrize(
@@ -239,12 +239,17 @@ def test_the_report_lists_counts_and_each_rejection(writer, target, plan):
     writer.refuse(plan.organizations[0].record["name"], times=2, message="name taken", status=409)
 
     # Act
-    text = run(writer, target, plan).format()
+    report = run(writer, target, plan)
 
     # Assert
-    assert text.splitlines()[0].startswith("organizations  created")
-    assert "rejected    1" in text.splitlines()[0]
-    assert f"  {plan.organizations[0].external_id}  409 name taken" in text
+    summary = report.summary()
+    assert summary["organizations_rejected"] == 1
+    assert summary["organizations_created"] == len(plan.organizations) - 1
+    [rejection] = [r for r in report.rejections if r.kind == ORGANIZATIONS]
+    assert (rejection.external_id, rejection.reason) == (
+        plan.organizations[0].external_id,
+        "409 name taken",
+    )
 
 
 def test_a_payload_the_api_would_refuse_is_reported_without_being_sent(writer, target, plan):
