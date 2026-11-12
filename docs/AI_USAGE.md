@@ -448,4 +448,3 @@ cover the review screen.
 **Problem found:** the existing candidate list also returned pairs of older
 versions and people pairs, which share the table since #112. The queue now
 shows only current organization pairs.
-
