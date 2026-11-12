@@ -49,6 +49,7 @@ TENANT_ROUTES = {
     "/api/tenants/{tenant_id}/duplicates/groups",
     "/api/tenants/{tenant_id}/sector-mix",
     "/api/tenants/{tenant_id}/runs/{run_id}/sector-mix",
+    "/api/tenants/{tenant_id}/affiliations",
 }
 
 
@@ -229,6 +230,23 @@ def test_another_tenants_sector_mix_is_not_found(api, pair):
 
     # Assert
     assert response.status_code == 404
+
+
+@pytest.mark.parametrize("status", ["linked", "conflict"])
+def test_affiliations_hold_only_the_readers_records(api, pair, status):
+    # Arrange
+    reader, _ = pair
+    path = f"/api/tenants/{reader.tenant.id}/affiliations"
+
+    # Act
+    page = api.get(path, params={"status": status, "page_size": 100}).json()
+
+    # Assert
+    sides = ("person", "organization")
+    sources = {item[side]["source_id"] for item in page["items"] for side in sides}
+    assert sources <= {str(reader.source.id)}
+    if status == "linked":
+        assert page["total"] > 0
 
 
 def test_search_finds_nothing_of_the_other_tenant(api, pair):
