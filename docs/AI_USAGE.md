@@ -426,4 +426,3 @@ settings; component tests cover the sign-in form and the app shell.
 **Problem found:** the existing API tests reached tenant routes with no
 session, so they now sign in through the real route as a user of the tenant
 they read.
-
