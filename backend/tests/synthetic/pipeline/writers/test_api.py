@@ -6,6 +6,7 @@ import pytest
 import respx
 
 from app.ingestion.omerlo.client import OmerloAuthError, create_omerlo_client
+from app.ingestion.omerlo.pagination import DEFAULT_PAGE_SIZE
 from app.ingestion.omerlo.settings import OmerloSettings
 from synthetic.pipeline.writers.api import ApiWriter
 from synthetic.pipeline.writers.base import WriteRejected
@@ -179,3 +180,22 @@ def test_staging_validation_errors_are_spelled_out(writer):
     # Act / Assert
     with pytest.raises(WriteRejected, match=r"^400 metadata\.key is invalid$"):
         writer.set_metadata("organizations", "o-1", [])
+
+
+@respx.mock
+def test_lists_ask_for_full_pages(writer):
+    # Arrange
+    workspaces = respx.get(f"{BASE}/composer/v2/workspaces").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+    people = respx.get(f"{BASE}/community/v2/workspaces/ws-1/people").mock(
+        return_value=httpx.Response(200, json={"data": []})
+    )
+
+    # Act
+    writer.list_workspaces()
+    writer.list_records("people", "ws-1")
+
+    # Assert
+    for route in (workspaces, people):
+        assert route.calls.last.request.url.params["limit"] == str(DEFAULT_PAGE_SIZE)
