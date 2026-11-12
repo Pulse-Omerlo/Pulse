@@ -19,7 +19,13 @@ from app.models import (
     SyncRun,
     Tenant,
 )
-from app.services.source_records import close_unseen, upsert_records, version_as_of
+from app.services.source_records import (
+    close_deleted,
+    close_dropped_children,
+    close_unseen,
+    upsert_records,
+    version_as_of,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -308,6 +314,85 @@ def test_removal_limited_to_some_kinds_leaves_the_other_kinds_current(session, r
     # Assert
     assert removed == ["org-1"]
     assert versions(session, "person-1")[0].valid_to is None
+
+
+def test_a_record_reported_deleted_is_closed_and_marked_removed(session, runs):
+    # Arrange
+    first, second = runs.next(), runs.next()
+    upsert_records(session, first, [org("org-1"), org("org-2")])
+
+    # Act
+    removed = close_deleted(session, second, "organization", ["org-1", "org-404"])
+
+    # Assert
+    assert removed == ["org-1"]
+    [version] = versions(session, "org-1")
+    assert (version.valid_to, version.removed_run) == (second.started_at, second.id)
+    assert versions(session, "org-2")[0].valid_to is None
+
+
+def test_a_deletion_only_closes_records_of_its_kind_and_source(session, runs):
+    # Arrange
+    other = Runs(session, add_source(session, "Tenant B"))
+    upsert_records(session, other.next(), [org("org-1")])
+    first, second = runs.next(), runs.next()
+    person = MappedRecord(
+        kind="person", external_id="org-1", workspace_id="ws-1", name_normalized="jean roy"
+    )
+    upsert_records(session, first, [person])
+
+    # Act
+    removed = close_deleted(session, second, "organization", ["org-1"])
+
+    # Assert
+    assert removed == []
+    assert all(version.valid_to is None for version in versions(session, "org-1"))
+
+
+def event_session(external_id: str, event_id: str) -> MappedRecord:
+    return MappedRecord(
+        kind="event_session",
+        external_id=external_id,
+        workspace_id=None,
+        name_normalized=f"session {external_id}",
+        attributes={"event_id": event_id},
+    )
+
+
+def test_sessions_dropped_from_a_read_event_are_closed_and_marked_removed(session, runs):
+    # Arrange
+    first, second = runs.next(), runs.next()
+    upsert_records(
+        session,
+        first,
+        [event_session("s1", "e1"), event_session("s2", "e1"), event_session("s3", "e2")],
+    )
+    upsert_records(session, second, [event_session("s1", "e1")])
+
+    # Act
+    removed = close_dropped_children(session, second, "event_session", "event_id", ["e1"])
+
+    # Assert
+    assert removed == ["s2"]
+    [version] = versions(session, "s2")
+    assert (version.valid_to, version.removed_run) == (second.started_at, second.id)
+    assert versions(session, "s1")[0].valid_to is None
+    assert versions(session, "s3")[0].valid_to is None
+
+
+def test_sessions_that_could_not_be_mapped_are_not_taken_for_dropped(session, runs):
+    # Arrange
+    first, second = runs.next(), runs.next()
+    upsert_records(session, first, [event_session("s1", "e1"), event_session("s2", "e1")])
+
+    # Act
+    removed = close_dropped_children(
+        session, second, "event_session", "event_id", ["e1"], keep=["s2"]
+    )
+
+    # Assert
+    assert removed == ["s1"]
+    assert versions(session, "s2")[0].valid_to is None
 
 
 def test_removal_only_closes_records_of_the_runs_own_source(session, runs):

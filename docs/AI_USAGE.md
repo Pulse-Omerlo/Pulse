@@ -36,7 +36,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Tool | Used by | Used for |
 | --- | --- | --- |
 | Claude Code (Anthropic) | AbdelrahmanWM | Writing code and tests from issues, reviewing diffs, drafting PR descriptions and issues |
-| Cursor (agent mode) | mijanullah12 | Designing and writing the file import and its tests from issue #24, drafting commit messages and docs |
+| Cursor (agent mode) | mijanullah12 | Designing and writing the file import and its tests from issue #24, the Omerlo deletion handling from issue #119, drafting commit messages and docs |
 | Cursor (agent mode) | hendriktebeng | Implementing automatic org-link recheck (#110) and its tests |
 
 ## Features built with substantial AI help
@@ -58,6 +58,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Recheck automatic organization links on matching-field change | #110 | |
 | Merging organizations joined by a chain of matches | #108 | |
 | Tier 2 fuzzy matching of organizations | #111 | |
+| Deleted Omerlo records and dropped event sessions | #119 | |
 
 ## Details
 
@@ -211,6 +212,30 @@ cases. A test counts the SQL statements of each list and checks that a page of
 **Problem found:** the first query-count test compared the first call with the
 second, but the first call also loads the tenant into the session, so the two
 differed for a reason unrelated to the page size. It now makes one call first.
+
+### Deleted Omerlo records and dropped event sessions (#119)
+
+Cursor's agent wrote the deletion signal in the connector (a record that
+answers 404 after being listed is yielded as deleted), the `close_deleted` and
+`close_dropped_children` helpers, the sync run changes that use them in
+incremental runs too, the `event_session` source record kind with its mapper
+and migration 0011, and the mutation step that drops a session. I chose to
+store sessions as source records, so a dropped session gets a real `removed`
+change, and to leave soft deletes out until #23 has Omerlo's answer.
+
+**Verification:** unit tests cover each 404 path in the connector and how the
+sync run passes deleted records and read events to the helpers. The
+integration tests run on Postgres against the mock server: an organization and
+an event that answer 404 after being listed, in incremental and full runs, and
+the demo mutation's dropped session, which an incremental sync now records as
+removed.
+
+**Problems found during the design:**
+- Event sessions were archived but never stored as source records, so a
+  session dropped from an event could not produce a `removed` change at all.
+- A 404 on a record's metadata or sessions, after its detail was read, used to
+  keep the record with empty metadata, which stored a changed version of a
+  record that no longer existed. Any 404 on the record now reports it deleted.
 
 ### Recheck automatic organization links (#110)
 

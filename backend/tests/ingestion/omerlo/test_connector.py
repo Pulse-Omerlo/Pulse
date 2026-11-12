@@ -217,28 +217,45 @@ def test_configured_workspace_the_key_cannot_see_is_an_error(api, client):
         list(connector.fetch_since(None))
 
 
-def test_record_deleted_before_its_detail_is_read_is_skipped(api, client, caplog):
-    gone, routes = add_record(api, "organization", "o-gone")
+def test_record_deleted_before_its_detail_is_read_is_reported_deleted(api, client, caplog):
+    # Arrange
+    gone, routes = add_record(api, "organization", "o-gone", NEW)
     routes["detail"].mock(return_value=httpx.Response(404, json={"error": "entity not found"}))
     kept, _ = add_record(api, "organization", "o-kept")
     api.get(list_url("organization")).mock(return_value=page([gone, kept]))
+    connector = OmerloConnector(client, entity_kinds=["organization"])
 
-    connector = OmerloConnector(client, entity_kinds=["organization"], metadata=False)
+    # Act
     records = list(connector.fetch_since(None))
 
-    assert kinds_and_ids(records) == [("organization", "o-kept")]
-    assert "disappeared" in caplog.text
+    # Assert
+    assert kinds_and_ids(records) == [
+        ("organization", "o-gone"),
+        ("organization", "o-kept"),
+        ("organization_metadata", "o-kept"),
+    ]
+    signal = records[0]
+    assert signal.deleted
+    assert signal.payload == gone
+    assert signal.updated_at == datetime(2026, 10, 15, tzinfo=UTC)
+    assert routes["metadata"].call_count == 0
+    assert not any(r.deleted for r in records[1:])
+    assert "o-gone was deleted during the sync" in caplog.text
 
 
 @pytest.mark.parametrize("extra", ["metadata", "sessions"])
-def test_record_deleted_before_its_extras_are_read_keeps_the_detail(api, client, extra):
-    event, routes = add_record(api, "event", "e1")
+def test_record_deleted_before_its_extras_are_read_is_reported_deleted(api, client, extra):
+    # Arrange
+    event, routes = add_record(api, "event", "e1", sessions=[{"id": "s1"}])
     routes[extra].mock(return_value=httpx.Response(404, json={"error": "entity not found"}))
     api.get(list_url("event")).mock(return_value=page([event]))
 
+    # Act
     records = list(OmerloConnector(client, entity_kinds=["event"]).fetch_since(None))
 
-    assert ("event", "e1") in kinds_and_ids(records)
+    # Assert
+    assert kinds_and_ids(records) == [("event", "e1")]
+    assert records[0].deleted
 
 
 def test_metadata_and_sessions_can_be_switched_off(api, client):
@@ -252,6 +269,19 @@ def test_metadata_and_sessions_can_be_switched_off(api, client):
     assert kinds_and_ids(connector.fetch_since(None)) == [("event", "e1")]
     assert routes["metadata"].call_count == 0
     assert routes["sessions"].call_count == 0
+
+
+@pytest.mark.parametrize(
+    ("options", "reads"),
+    [
+        ({}, True),
+        ({"event_sessions": False}, False),
+        ({"entity_kinds": ["organization"]}, False),
+    ],
+)
+def test_the_connector_says_whether_it_reads_whole_session_lists(client, options, reads):
+    # Act / Assert
+    assert OmerloConnector(client, **options).reads_event_sessions is reads
 
 
 def test_detail_without_a_data_object_raises(api, client):

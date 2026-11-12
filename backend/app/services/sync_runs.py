@@ -24,7 +24,12 @@ from app.processing.entity_resolution import MatchResult, match_organizations
 from app.services.industry import ClassificationReport, classify_organizations
 from app.services.link_recheck import LINK_RECHECK_KEY, RecheckResult, recheck_links
 from app.services.record_changes import record_changes
-from app.services.source_records import close_unseen, upsert_records
+from app.services.source_records import (
+    close_deleted,
+    close_dropped_children,
+    close_unseen,
+    upsert_records,
+)
 from app.storage.archive import PayloadArchive
 from app.storage.raw_records import archive_records
 
@@ -57,6 +62,11 @@ class Fetched:
     kinds: tuple[str, ...] | None = None
     # Archived with the run but neither counted nor mapped, e.g. an imported file.
     archive_only: list[RawRecord] = field(default_factory=list)
+    # Records the source reported deleted; their current versions are closed as removed.
+    deleted: list[RawRecord] = field(default_factory=list)
+    # Events whose whole session list was read, or that were deleted; their sessions
+    # missing from this run are removed.
+    session_events: set[str] = field(default_factory=set)
 
 
 class SourceReader(Protocol):
@@ -242,7 +252,12 @@ def fetch(connector: OmerloConnector, source: Source, *, full: bool) -> Fetched:
             workspace_id = workspace["id"]
             since = stored.get(workspace_id, {}).get(kind)
             records = list(connector.fetch_community(kind, workspace_id, since))
-            fetched.records += records
+            fetched.records += [r for r in records if not r.deleted]
+            fetched.deleted += [r for r in records if r.deleted]
+            if connector.reads_event_sessions:
+                fetched.session_events.update(
+                    r.external_id for r in records if r.entity_kind == "event"
+                )
             latest = newest(r for r in records if r.entity_kind == kind)
             if latest is not None:
                 fetched.workspace_newest.setdefault(workspace_id, {})[kind] = latest
@@ -272,11 +287,13 @@ def store(
             for failure in mapped.failures[:MAX_REPORTED_FAILURES]
         ]
     upserted = upsert_records(session, run, mapped.records)
-    removed: list[str] = []
+    failed = {f.external_id for f in mapped.failures}
+    removed = close_reported_deleted(session, run, fetched.deleted)
+    removed += close_dropped_children(
+        session, run, "event_session", "event_id", fetched.session_events, keep=failed
+    )
     if run.mode == "full":
-        removed = close_unseen(
-            session, run, keep={f.external_id for f in mapped.failures}, kinds=fetched.kinds
-        )
+        removed += close_unseen(session, run, keep=failed, kinds=fetched.kinds)
     rechecked = (recheck or recheck_links)(session, run, upserted.carried)
     run.counts = {
         **(run.counts or {}),
@@ -297,6 +314,17 @@ def store(
         "removed": len(removed),
         "failed": len(mapped.failures),
     }
+
+
+def close_reported_deleted(session: Session, run: SyncRun, deleted: list[RawRecord]) -> list[str]:
+    ids_by_kind: dict[str, set[str]] = {}
+    for record in deleted:
+        ids_by_kind.setdefault(record.entity_kind, set()).add(record.external_id)
+    return [
+        external_id
+        for kind, external_ids in sorted(ids_by_kind.items())
+        for external_id in close_deleted(session, run, kind, external_ids)
+    ]
 
 
 def finish(

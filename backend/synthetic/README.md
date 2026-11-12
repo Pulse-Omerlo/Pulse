@@ -122,6 +122,7 @@ Fields that can be edited:
 
 - organizations: `name`, `domain` (canonical URL, website and email in every locale), `linkedin`, `linkedin_removed` (clears LinkedIn in every locale), `crm_id` (metadata), `phone`
 - people: `last_name`, `job_title`, `email`, `linkedin`
+- events: `sessions` (drops one session of an event that has several; the session shows as removed and the event only gets a new `updated_at`)
 
 `Edit(..., paired=True)` limits eligibility to records listed in
 `ground_truth["organization_duplicates"]` or `person_duplicates`, so the edited
@@ -132,7 +133,7 @@ Records are picked by an RNG seeded with the set and tenant, among records sorte
 
 Every added or edited record gets an `updated_at` after every record already in the fixtures (one day after the latest, one minute apart), so an incremental sync sorted by `updated_at-desc` sees it. A metadata change also bumps its record's `updated_at`. Changed records are validated against the schema models.
 
-The `demo` set, in each tenant: adds 2 organizations and 3 people; edits organizations by name, domain, LinkedIn, CRM id, phone and one by name, domain, LinkedIn and CRM id together; edits people by job title, by last name and email, and by LinkedIn; deletes 1 organization, 2 people and 1 event.
+The `demo` set, in each tenant: adds 2 organizations and 3 people; edits organizations by name, domain, LinkedIn, CRM id, phone and one by name, domain, LinkedIn and CRM id together; edits people by job title, by last name and email, and by LinkedIn; deletes 1 organization, 2 people and 1 event; drops 1 session from another event.
 
 Small recheck sets (one paired edit each):
 

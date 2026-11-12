@@ -72,8 +72,8 @@ def test_demo_adds_edits_and_deletes_in_every_tenant(demo):
     for slug, count in counts.items():
         assert count["added"] == 5, slug
         assert count["modified"] == 9, slug
-        # One organization, two people, one event and its sessions.
-        assert count["removed"] >= 5, slug
+        # One organization, two people, one event and its sessions, one session of another event.
+        assert count["removed"] >= 6, slug
 
 
 def test_changed_records_are_newer_than_every_original_record(demo):
@@ -104,11 +104,38 @@ def test_unchanged_records_keep_their_updated_at(demo):
 
     # Assert
     for old, new in zip(before, after, strict=True):
+        left = by_id(new, "event_sessions")
+        dropped_from = {
+            s["event_id"] for s in old.resources["event_sessions"] if s["id"] not in left
+        }
         for kind in MODELS:
             current = by_id(new, kind)
             for record in old.resources[kind]:
-                if record["id"] in current and record["id"] not in changed:
+                if record["id"] in current and record["id"] not in changed | dropped_from:
                     assert current[record["id"]] == record
+
+
+def test_dropping_a_session_bumps_its_event_and_keeps_the_others(demo):
+    # Arrange
+    before, after, diff = demo
+
+    # Act
+    for old, new in zip(before, after, strict=True):
+        events = by_id(new, "events")
+        sessions = by_id(old, "event_sessions")
+        removed = diff["tenants"][old.tenant.slug]["removed"]
+        dropped = [
+            sessions[entry["id"]]
+            for entry in removed
+            if entry["kind"] == "event_sessions" and sessions[entry["id"]]["event_id"] in events
+        ]
+
+        # Assert
+        [session] = dropped
+        event = events[session["event_id"]]
+        assert event["updated_at"] > diff["changed_after"]
+        assert by_id(old, "events")[event["id"]] | {"updated_at": event["updated_at"]} == event
+        assert any(s["event_id"] == event["id"] for s in new.resources["event_sessions"])
 
 
 def test_edits_cover_single_and_multi_field_changes_on_matching_fields(demo):
