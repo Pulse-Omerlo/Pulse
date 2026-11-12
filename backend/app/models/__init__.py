@@ -7,6 +7,7 @@ from app.models.people import Person, PersonLink
 from app.models.records import RawRecord, SourceRecord
 from app.models.resolution import MatchCandidate, Organization, OrgLink
 from app.models.tenancy import Source, SyncRun, Tenant
+from app.models.users import User, UserSession
 
 __all__ = [
     "Base",
@@ -22,4 +23,6 @@ __all__ = [
     "SourceRecord",
     "SyncRun",
     "Tenant",
+    "User",
+    "UserSession",
 ]

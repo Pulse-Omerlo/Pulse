@@ -2,6 +2,7 @@
 """A TenantSession only ever reads and writes the rows of the tenant it is bound to."""
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import func, insert, inspect, select, text, update
@@ -27,6 +28,8 @@ from app.models import (
     SourceRecord,
     SyncRun,
     Tenant,
+    User,
+    UserSession,
 )
 
 pytestmark = pytest.mark.integration
@@ -115,6 +118,17 @@ def add_graph(session, name: str) -> Graph:
             rules_version="test",
         ),
     }
+    email = f"{name.lower().replace(' ', '-')}@pulse.test"
+    user = User(tenant_id=tid, email=email, password_hash="x")
+    session.add(user)
+    session.flush()
+    rows[User] = user
+    rows[UserSession] = UserSession(
+        tenant_id=tid,
+        user_id=user.id,
+        token_hash=f"{name} token",
+        expires_at=datetime(2030, 1, 1, tzinfo=UTC),
+    )
     session.add_all(rows.values())
     session.flush()
     return Graph(tenant, rows)
@@ -152,6 +166,8 @@ def test_the_graph_has_a_row_in_every_tenant_owned_table():
         PersonLink,
         MatchCandidate,
         IndustryClassification,
+        User,
+        UserSession,
     }
 
 
