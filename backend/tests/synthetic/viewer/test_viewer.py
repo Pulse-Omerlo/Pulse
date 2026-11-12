@@ -1,4 +1,7 @@
 # AI contribution: 50% or more AI-generated
+import json
+from dataclasses import replace
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -7,15 +10,30 @@ from synthetic.pipeline.sinks.omerlo import OmerloSink, TenantGuardError
 from synthetic.pipeline.target import Target
 from synthetic.pipeline.writers.base import PEOPLE
 from synthetic.pipeline.writers.fake import FakeWriter
-from synthetic.viewer.app import create_app
-from synthetic.viewer.data import load_fixtures, load_omerlo
+from synthetic.viewer.__main__ import cache_path, cached
+from synthetic.viewer.app import SYNC_HEADER, Source, create_app
+from synthetic.viewer.data import Dataset, load_fixtures, load_omerlo, read_records, save_records
 from tests.synthetic.pipeline.conftest import WORKSPACE_ID
+
+SYNC = {SYNC_HEADER: "1"}
+
+
+def now(work):
+    work()
+
+
+def empty() -> Dataset:
+    return Dataset("files: empty", [], [])
+
+
+def serve(data: Dataset) -> TestClient:
+    return TestClient(create_app(Source(lambda: data, data)))
 
 
 @pytest.fixture
 def fixture_client(plan, tmp_path):
     folder = write_files(plan, tmp_path)
-    with TestClient(create_app(load_fixtures(folder))) as client:
+    with serve(load_fixtures(folder)) as client:
         yield client
 
 
@@ -91,7 +109,7 @@ def test_the_page_and_summary_are_served(fixture_client, plan):
 
 def test_the_check_is_clean_after_a_full_run(written, target, plan):
     # Arrange
-    client = TestClient(create_app(load_omerlo(written, target, plan)))
+    client = serve(load_omerlo(written, target, plan))
 
     # Act
     check = client.get("/api/check").json()
@@ -109,7 +127,7 @@ def test_the_check_finds_missing_records_and_wrong_employers(written, target, pl
     del written.records[PEOPLE][people[0]]
     written.employers[people[1]] = next(iter(written.records["organizations"]))
     written.employers.pop(people[2])
-    client = TestClient(create_app(load_omerlo(written, target, plan)))
+    client = serve(load_omerlo(written, target, plan))
 
     # Act
     check = client.get("/api/check").json()
@@ -140,7 +158,7 @@ def test_records_from_other_runs_are_left_out(written, target, plan):
 
 def test_without_a_plan_there_is_no_check(written, target):
     # Arrange
-    client = TestClient(create_app(load_omerlo(written, target, None)))
+    client = serve(load_omerlo(written, target, None))
 
     # Act / Assert
     assert client.get("/api/check").json() == {"available": False}
@@ -161,7 +179,7 @@ def test_no_response_contains_the_api_key(written, target, plan, monkeypatch):
     # Arrange
     secret = "sk-test-do-not-leak"
     monkeypatch.setenv("OMERLO_API_KEY", secret)
-    client = TestClient(create_app(load_omerlo(written, target, plan)))
+    client = serve(load_omerlo(written, target, plan))
     paths = [
         "/",
         "/api/summary",
@@ -170,6 +188,7 @@ def test_no_response_contains_the_api_key(written, target, plan, monkeypatch):
         "/api/people",
         "/api/duplicates",
         "/api/check",
+        "/api/sync",
     ]
 
     # Act
@@ -177,3 +196,101 @@ def test_no_response_contains_the_api_key(written, target, plan, monkeypatch):
 
     # Assert
     assert all(secret not in body for body in bodies)
+
+
+def test_a_sync_reads_the_source_again_and_serves_what_it_found(written, target, plan):
+    # Arrange
+    source = Source(lambda: load_omerlo(written, target, plan), start=now)
+    source.sync()
+    client = TestClient(create_app(source))
+    del written.records[PEOPLE][next(iter(written.records[PEOPLE]))]
+
+    # Act
+    response = client.post("/api/sync", headers=SYNC)
+
+    # Assert
+    assert response.status_code == 202
+    assert response.json()["syncing"] is False
+    assert client.get("/api/summary").json()["people"] == len(plan.people) - 1
+
+
+def test_until_the_first_read_ends_the_data_is_unavailable():
+    # Arrange
+    pending = []
+    client = TestClient(create_app(Source(empty, start=pending.append)))
+
+    # Act
+    started = client.post("/api/sync", headers=SYNC).json()
+    data = client.get("/api/summary")
+
+    # Assert
+    assert started == {"syncing": True, "error": None, "read_at": None}
+    assert data.status_code == 503
+    pending.pop()()
+    assert client.get("/api/summary").status_code == 200
+
+
+def test_only_one_read_runs_at_a_time():
+    # Arrange
+    pending = []
+    source = Source(empty, start=pending.append)
+
+    # Act
+    first, second = source.sync(), source.sync()
+
+    # Assert
+    assert (first, second) == (True, False)
+    assert len(pending) == 1
+
+
+def test_a_failed_sync_keeps_the_last_data_and_says_why(written, target, plan):
+    # Arrange
+    data = load_omerlo(written, target, plan)
+
+    def refused():
+        raise TenantGuardError("workspace x is not visible to this key")
+
+    client = TestClient(create_app(Source(refused, data, start=now)))
+
+    # Act
+    status = client.post("/api/sync", headers=SYNC).json()
+
+    # Assert
+    assert status["error"] == "workspace x is not visible to this key"
+    assert status["read_at"] == data.read_at
+    assert client.get("/api/summary").json()["people"] == len(plan.people)
+
+
+def test_a_sync_without_the_header_is_refused(fixture_client):
+    # Act / Assert
+    assert fixture_client.post("/api/sync").status_code == 403
+
+
+def test_saved_records_come_back_with_the_current_plan_truth(written, target, plan, tmp_path):
+    # Arrange
+    data = load_omerlo(written, target, plan)
+    path = tmp_path / "viewer" / "copy.json"
+    save_records(replace(data, truth={"old": True}), path)
+
+    # Act
+    loaded = read_records(path, plan.ground_truth)
+
+    # Assert
+    assert loaded == data
+
+
+def test_a_broken_saved_copy_is_ignored(target, plan, tmp_path, monkeypatch):
+    # Arrange
+    monkeypatch.setattr("synthetic.viewer.__main__.CACHE_DIR", tmp_path)
+    path = cache_path(target, plan)
+    path.write_text(json.dumps({"source": "omerlo"}), encoding="utf-8")
+
+    # Act / Assert
+    assert cached(path, plan) is None
+    assert cached(tmp_path / "none.json", plan) is None
+
+
+def test_each_run_gets_its_own_saved_copy(target, plan):
+    # Act / Assert
+    assert cache_path(target, plan) != cache_path(target, None)
+    assert plan.mix.name in cache_path(target, plan).name
