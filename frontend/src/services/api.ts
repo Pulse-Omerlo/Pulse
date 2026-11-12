@@ -279,11 +279,27 @@ export interface SectorShare {
   people_count: number | null;
   people_share: number | null;
   target: number | null;
+  // Percent of the region's classified employer businesses; null when not compared.
+  region_share: number | null;
   organizations: MixOrganization[];
   people: MixPerson[] | null;
 }
 
-export type GapKind = "too_few_organizations" | "too_few_people" | "below_target";
+export type GapKind = "too_few_organizations" | "too_few_people" | "below_target" | "below_region";
+
+export interface RegionalBaseline {
+  table: string;
+  title: string;
+  release: string;
+  reference_period: string;
+  attribution: string;
+  licence: string;
+  region: string;
+  region_name: string;
+  classified_businesses: number;
+  // Left out of every regional share.
+  unclassified_businesses: number;
+}
 
 export interface Gap {
   code: string;
@@ -296,7 +312,14 @@ export interface Gap {
 export interface SectorMix {
   sync_run_id: string;
   computed_at: string;
-  settings: { gap_points: number; targets: Record<string, number>; version: string };
+  settings: {
+    gap_points: number;
+    targets: Record<string, number>;
+    region?: string | null;
+    region_margin?: number | null;
+    baseline?: RegionalBaseline | null;
+    version: string;
+  };
   organizations: number;
   classified: number;
   people_status: "linked" | "not_linked";

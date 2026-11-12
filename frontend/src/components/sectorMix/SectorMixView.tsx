@@ -112,6 +112,7 @@ export function SectorMixView({
 
   const { mix: shown } = result;
   const peopleLinked = shown.people_status === "linked";
+  const baseline = shown.settings.baseline ?? null;
   const sectors = [...shown.sectors].sort(
     (a, b) => b.organization_share - a.organization_share || a.name.localeCompare(b.name),
   );
@@ -136,6 +137,7 @@ export function SectorMixView({
             <SectorChart
               sectors={sectors}
               peopleLinked={peopleLinked}
+              regionName={baseline?.region_name ?? null}
               selectedCode={selectedCode}
               onSelect={setSelectedCode}
             />
@@ -145,6 +147,16 @@ export function SectorMixView({
             <GapList gaps={shown.gaps} selectedCode={selectedCode} onSelect={setSelectedCode} />
           </div>
         </div>
+      )}
+
+      {baseline && (
+        <p className="muted baseline-source">
+          {baseline.region_name} area shares are of the{" "}
+          {baseline.classified_businesses.toLocaleString("en-CA")} employer businesses Statistics
+          Canada classified on {baseline.reference_period}; the{" "}
+          {baseline.unclassified_businesses.toLocaleString("en-CA")} it could not classify are left
+          out. {baseline.attribution} ({baseline.licence})
+        </p>
       )}
 
       {selected && (
