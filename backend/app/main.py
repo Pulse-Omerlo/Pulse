@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.exc import SQLAlchemyError
 
-from app.api import browse, organizations
+from app.api import browse, organizations, sector_mix
 from app.core.database import DatabaseNotConfiguredError, check_database
 from app.core.errors import UnhandledErrorMiddleware, register_exception_handlers
 from app.core.logging import configure_logging, get_logger
@@ -52,6 +52,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(RequestContextMiddleware)
 app.include_router(browse.router)
 app.include_router(organizations.router)
+app.include_router(sector_mix.router)
 
 
 @app.get("/api/health")

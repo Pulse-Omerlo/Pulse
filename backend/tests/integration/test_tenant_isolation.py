@@ -47,6 +47,8 @@ TENANT_ROUTES = {
     "/api/tenants/{tenant_id}/organizations/{organization_id}/timeline",
     "/api/tenants/{tenant_id}/duplicates/candidates",
     "/api/tenants/{tenant_id}/duplicates/groups",
+    "/api/tenants/{tenant_id}/sector-mix",
+    "/api/tenants/{tenant_id}/runs/{run_id}/sector-mix",
 }
 
 
@@ -199,6 +201,31 @@ def test_another_tenants_organization_is_not_found(api, session, pair, suffix):
 
     # Act
     response = api.get(f"/api/tenants/{reader.tenant.id}/organizations/{guessed}{suffix}")
+
+    # Assert
+    assert response.status_code == 404
+
+
+def test_the_sector_mix_is_the_readers_own(api, pair):
+    # Arrange
+    reader, _ = pair
+
+    # Act
+    mix = api.get(f"/api/tenants/{reader.tenant.id}/sector-mix").json()
+
+    # Assert
+    assert mix["sync_run_id"] == str(reader.run.id)
+    keys = {o["key"] for s in mix["sectors"] for o in s["organizations"]}
+    keys |= {o["key"] for o in mix["unclassified"]}
+    assert len(keys) == mix["organizations"] > 0
+
+
+def test_another_tenants_sector_mix_is_not_found(api, pair):
+    # Arrange
+    reader, other = pair
+
+    # Act
+    response = api.get(f"/api/tenants/{reader.tenant.id}/runs/{other.run.id}/sector-mix")
 
     # Assert
     assert response.status_code == 404

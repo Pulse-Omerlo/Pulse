@@ -55,6 +55,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | CSV and JSON file import | #24 | |
 | Industry classification of organizations | #149 | |
 | Tenant API for organizations, runs and duplicates | #63 | |
+| Sector mix and gaps | #150 | |
 | Recheck automatic organization links on matching-field change | #110 | |
 | Merging organizations joined by a chain of matches | #108 | |
 | Tier 2 fuzzy matching of organizations | #111 | |
@@ -213,6 +214,23 @@ cases. A test counts the SQL statements of each list and checks that a page of
 **Problem found:** the first query-count test compared the first call with the
 second, but the first call also loads the tenant into the session, so the two
 differed for a reason unrelated to the page size. It now makes one call first.
+
+### Sector mix and gaps (#150)
+
+Claude Code wrote the sector mix calculation, the gap rules, the `sector_mix`
+table and its migration, the step that measures the mix after each successful
+sync, and the two read endpoints.
+
+**Verification:** unit tests run a small hand-built network whose shares and
+gaps were worked out in advance (merged duplicates counted once, ties, the
+threshold itself, targets with no organization, no linked people). The
+integration tests check stored evidence, planted gaps, one result per run,
+tenant isolation, and that after a sync of synthetic data the counts add up to
+the stored organizations and classifications.
+
+**Problem found:** the latest result was first chosen by the time it was
+computed, which is the same for every row written in one transaction. It is
+now chosen by the start of its sync run.
 
 ### Deleted Omerlo records and dropped event sessions (#119)
 
