@@ -40,10 +40,12 @@ def main(argv: Sequence[str] | None = None) -> None:
             with system_access(session):
                 tenant = find_tenant(session, args.tenant)
             user = create_user(session, tenant.id, args.email, read_password())
+            # Read before the commit expires them: the session is bound to no tenant.
+            created = f"Created {user.email} in {tenant.name}"
             session.commit()
         except (SyncCommandError, DataValidationError) as error:
             parser.exit(2, f"error: {error}\n")
-        print(f"Created {user.email} in {tenant.name}")
+        print(created)
 
 
 if __name__ == "__main__":
