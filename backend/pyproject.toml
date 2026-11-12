@@ -8,6 +8,7 @@ dependencies = [
     "annotated-doc==0.0.5",
     "annotated-types==0.8.0",
     "anyio==4.15.1",
+    "argon2-cffi==25.1.0",
     "boto3>=1.43.116",
     "certifi==2026.10.23",
     "charset-normalizer==3.5.2",
@@ -105,6 +106,7 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "T20"]
 "app/seed.py" = ["T201"]
 "app/sync.py" = ["T201"]
 "app/import_file.py" = ["T201"]
+"app/create_user.py" = ["T201"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["app"]
