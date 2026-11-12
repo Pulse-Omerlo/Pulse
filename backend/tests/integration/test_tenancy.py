@@ -24,6 +24,7 @@ from app.models import (
     PersonLink,
     RawRecord,
     RecordChange,
+    SectorMixResult,
     Source,
     SourceRecord,
     SyncRun,
@@ -117,6 +118,14 @@ def add_graph(session, name: str) -> Graph:
             primary_sector="72",
             rules_version="test",
         ),
+        SectorMixResult: SectorMixResult(
+            tenant_id=tid,
+            sync_run_id=run.id,
+            organizations=1,
+            classified=1,
+            people_status="not_linked",
+            people=0,
+        ),
     }
     email = f"{name.lower().replace(' ', '-')}@pulse.test"
     user = User(tenant_id=tid, email=email, password_hash="x")
@@ -166,6 +175,7 @@ def test_the_graph_has_a_row_in_every_tenant_owned_table():
         PersonLink,
         MatchCandidate,
         IndustryClassification,
+        SectorMixResult,
         User,
         UserSession,
     }
