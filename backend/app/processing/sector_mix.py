@@ -17,11 +17,13 @@ from pathlib import Path
 from app.processing.industry import sectors
 
 DEFAULT_GAP_POINTS = 10.0
+DEFAULT_REGION_MARGIN = 5.0
 
 GAP_TOO_FEW_ORGANIZATIONS = "too_few_organizations"
 GAP_TOO_FEW_PEOPLE = "too_few_people"
 GAP_BELOW_TARGET = "below_target"
-GAP_KINDS = (GAP_TOO_FEW_ORGANIZATIONS, GAP_TOO_FEW_PEOPLE, GAP_BELOW_TARGET)
+GAP_BELOW_REGION = "below_region"
+GAP_KINDS = (GAP_TOO_FEW_ORGANIZATIONS, GAP_TOO_FEW_PEOPLE, GAP_BELOW_TARGET, GAP_BELOW_REGION)
 
 PEOPLE_LINKED = "linked"
 PEOPLE_NOT_LINKED = "not_linked"
@@ -34,11 +36,20 @@ class MixSettings:
     gap_points: float = DEFAULT_GAP_POINTS
     # Sector code -> the share of organizations, in percent, the network wants at least.
     targets: Mapping[str, float] = field(default_factory=dict)
+    # Census metropolitan area code or name the network is compared with, if any.
+    region: str | None = None
+    # A sector's share below the region's by more than this, in points, is a gap.
+    region_margin: float = DEFAULT_REGION_MARGIN
 
     @property
     def version(self) -> str:
         payload = json.dumps(
-            {"gap_points": self.gap_points, "targets": dict(sorted(self.targets.items()))}
+            {
+                "gap_points": self.gap_points,
+                "targets": dict(sorted(self.targets.items())),
+                "region": self.region,
+                "region_margin": self.region_margin,
+            }
         )
         return hashlib.sha256(payload.encode()).hexdigest()[:16]
 
@@ -78,6 +89,19 @@ class SectorShare:
     people: list[PersonUnit] | None
     people_share: float | None
     target: float | None
+    # The sector's share of the region's classified employer businesses, when compared.
+    region_share: float | None = None
+
+
+@dataclass(frozen=True)
+class RegionShares:
+    """The region a network is compared with: its name and each sector's share."""
+
+    name: str
+    shares: Mapping[str, float]
+    margin: float
+    # Shown in each explanation, e.g. "Statistics Canada, June 2026".
+    source: str
 
 
 @dataclass(frozen=True)
@@ -122,7 +146,18 @@ def load_settings(path: Path) -> MixSettings:
     gap_points = float(data.get("gap_points", DEFAULT_GAP_POINTS))
     if gap_points < 0:
         raise ValueError(f"{path.name}: gap_points must not be negative")
-    return MixSettings(gap_points=gap_points, targets=targets)
+    region = data.get("region")
+    if region is not None and (not isinstance(region, str) or not region.strip()):
+        raise ValueError(f"{path.name}: region must be a metropolitan area code or name")
+    margin = float(data.get("region_margin", DEFAULT_REGION_MARGIN))
+    if margin < 0:
+        raise ValueError(f"{path.name}: region_margin must not be negative")
+    return MixSettings(
+        gap_points=gap_points,
+        targets=targets,
+        region=region.strip() if region else None,
+        region_margin=margin,
+    )
 
 
 def percent(part: int, whole: int) -> float:
@@ -133,6 +168,7 @@ def compute_mix(
     organizations: Iterable[OrganizationUnit],
     people: Iterable[PersonUnit] | None,
     settings: MixSettings,
+    region: RegionShares | None = None,
 ) -> SectorMix:
     """Each sector's share of organizations and people, and the gaps ranked by size.
 
@@ -172,10 +208,16 @@ def compute_mix(
             people=people_by_sector.get(code, []) if linked else None,
             people_share=(percent(len(people_by_sector.get(code, [])), placed) if linked else None),
             target=settings.targets.get(code),
+            region_share=region.shares.get(code, 0.0) if region else None,
         )
-        for code in sorted(set(by_sector) | set(people_by_sector) | set(settings.targets))
+        for code in sorted(
+            set(by_sector)
+            | set(people_by_sector)
+            | set(settings.targets)
+            | set(region.shares if region else ())
+        )
     ]
-    gaps = [gap for share in shares for gap in find_gaps(share, settings.gap_points)]
+    gaps = [gap for share in shares for gap in find_gaps(share, settings.gap_points, region)]
     gaps.sort(key=lambda gap: (-gap.size, gap.code, GAP_KINDS.index(gap.kind)))
     return SectorMix(
         sectors=shares,
@@ -188,8 +230,10 @@ def compute_mix(
     )
 
 
-def find_gaps(share: SectorShare, gap_points: float) -> list[Gap]:
-    found = (share_gap(share, gap_points), target_gap(share))
+def find_gaps(
+    share: SectorShare, gap_points: float, region: RegionShares | None = None
+) -> list[Gap]:
+    found = (share_gap(share, gap_points), target_gap(share), region_gap(share, region))
     return [gap for gap in found if gap is not None]
 
 
@@ -227,5 +271,24 @@ def target_gap(share: SectorShare) -> Gap | None:
         explanation=(
             f"{share.name} makes up {share.organization_share:.1f}% of the network's "
             f"organizations, below its target of {share.target:.1f}%."
+        ),
+    )
+
+
+def region_gap(share: SectorShare, region: RegionShares | None) -> Gap | None:
+    """The sector's share of organizations, when below the region's by more than the margin."""
+    if region is None or share.region_share is None:
+        return None
+    difference = share.region_share - share.organization_share
+    if difference <= region.margin:
+        return None
+    return Gap(
+        code=share.code,
+        kind=GAP_BELOW_REGION,
+        size=round(difference, 1),
+        explanation=(
+            f"{share.name} makes up {share.organization_share:.1f}% of the network's "
+            f"organizations but {share.region_share:.1f}% of employer businesses in the "
+            f"{region.name} area ({region.source})."
         ),
     )

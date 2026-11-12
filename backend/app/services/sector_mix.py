@@ -18,10 +18,12 @@ from app.models import (
     SyncRun,
     Tenant,
 )
+from app.processing.regional_baseline import load_baseline
 from app.processing.sector_mix import (
     MixSettings,
     OrganizationUnit,
     PersonUnit,
+    RegionShares,
     SectorMix,
     compute_mix,
     load_settings,
@@ -103,23 +105,45 @@ def measure_sector_mix(
     tenant = session.get_one(Tenant, run.tenant_id)
     settings = settings_for(tenant)
     linked = people(session, run.tenant_id) if people else None
-    mix = compute_mix(organization_units(session, run.tenant_id), linked, settings)
+    region, source = regional_baseline(settings)
+    mix = compute_mix(organization_units(session, run.tenant_id), linked, settings, region)
     session.execute(
         delete(SectorMixResult).where(
             SectorMixResult.tenant_id == run.tenant_id, SectorMixResult.sync_run_id == run.id
         )
     )
-    result = SectorMixResult(tenant_id=run.tenant_id, sync_run_id=run.id, **as_row(mix, settings))
+    row = as_row(mix, settings, source)
+    result = SectorMixResult(tenant_id=run.tenant_id, sync_run_id=run.id, **row)
     session.add(result)
     session.flush()
     return result
 
 
-def as_row(mix: SectorMix, settings: MixSettings) -> dict:
+def regional_baseline(settings: MixSettings) -> tuple[RegionShares | None, dict | None]:
+    """The shares of the network's region, and the source shown with them."""
+    if settings.region is None:
+        return None, None
+    baseline = load_baseline()
+    region = baseline.region(settings.region)
+    # The title ends with the reference month, e.g. "..., June 2026".
+    period = baseline.title.rsplit(", ", 1)[-1]
+    shares = RegionShares(
+        name=region.name,
+        shares=region.shares(),
+        margin=settings.region_margin,
+        source=f"Statistics Canada, {period}",
+    )
+    return shares, baseline.source(region)
+
+
+def as_row(mix: SectorMix, settings: MixSettings, baseline: dict | None = None) -> dict:
     return {
         "settings": {
             "gap_points": settings.gap_points,
             "targets": dict(settings.targets),
+            "region": settings.region,
+            "region_margin": settings.region_margin,
+            "baseline": baseline,
             "version": settings.version,
         },
         "organizations": mix.organizations,
@@ -137,6 +161,9 @@ def as_row(mix: SectorMix, settings: MixSettings) -> dict:
                     None if share.people_share is None else round(share.people_share, 1)
                 ),
                 "target": share.target,
+                "region_share": (
+                    None if share.region_share is None else round(share.region_share, 1)
+                ),
                 "organizations": [organization_json(unit) for unit in share.organizations],
                 "people": (
                     None if share.people is None else [person_json(p) for p in share.people]

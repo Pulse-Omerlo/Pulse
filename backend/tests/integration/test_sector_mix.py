@@ -17,6 +17,7 @@ from app.models import (
     SyncRun,
     Tenant,
 )
+from app.processing.regional_baseline import load_baseline
 from app.processing.sector_mix import PersonUnit
 from app.services.sector_mix import latest_mix, measure_sector_mix, mix_for_run
 
@@ -204,3 +205,27 @@ def test_another_networks_organizations_are_not_counted(session):
     assert [s["code"] for s in result.sectors] == ["31-33", "72"]
     with bound_to_tenant(session, other.tenant.id):
         assert latest_mix(session, other.tenant.id) is None
+
+
+def test_a_network_with_a_region_stores_regional_shares_and_their_source(session, targets):
+    # Arrange
+    targets.write_text('region = "Québec"\nregion_margin = 5\n', encoding="utf-8")
+    net = Network(session)
+    net.organization("o-1", "54")
+    session.commit()
+    region = load_baseline().region("421")
+
+    # Act
+    result = net.measure()
+
+    # Assert
+    baseline = result.settings["baseline"]
+    assert (baseline["region"], baseline["region_name"]) == ("421", "Québec")
+    assert baseline["unclassified_businesses"] == region.unclassified
+    assert baseline["attribution"].startswith("Adapted from Statistics Canada")
+    shares = {s["code"]: s["region_share"] for s in result.sectors}
+    assert set(shares) == set(region.counts)
+    assert shares["72"] == round(region.shares()["72"], 1)
+    below = {g["code"] for g in result.gaps if g["kind"] == "below_region"}
+    assert "54" not in below
+    assert below
