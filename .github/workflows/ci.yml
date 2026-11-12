@@ -65,6 +65,26 @@ jobs:
           tar -xzf "$archive" gitleaks
       - run: ${{ runner.temp }}/gitleaks git --redact --no-banner .
 
+  # Fails on known vulnerabilities in the locked dependencies.
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - name: Backend (all locked packages)
+        working-directory: backend
+        run: |
+          uv export --frozen --no-emit-project --format requirements-txt > "$RUNNER_TEMP/requirements.txt"
+          uvx pip-audit==2.10.1 -r "$RUNNER_TEMP/requirements.txt" --require-hashes --disable-pip --progress-spinner off
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      # Only what ships in the UI image; dev tools such as ESLint are left out.
+      - name: Frontend (production packages, high severity and above)
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+
   backend-tests:
     name: Backend tests
     runs-on: ubuntu-latest
