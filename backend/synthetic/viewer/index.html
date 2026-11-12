@@ -26,6 +26,12 @@
          font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
   main { max-width: 1120px; margin: 0 auto; padding: 24px 16px 48px; }
   h1 { font-size: 20px; margin: 0 0 4px; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-start; justify-content: space-between; margin-bottom: 20px; }
+  header .sub { margin: 0; }
+  .sync { display: flex; gap: 8px; align-items: center; color: var(--ink-2); font-size: 12px; }
+  .sync button { font: inherit; font-size: 13px; padding: 5px 12px; border-radius: 6px; cursor: pointer;
+                 border: 1px solid var(--axis); background: var(--surface); color: var(--ink); }
+  .sync button:disabled { cursor: progress; color: var(--muted); }
   h2 { font-size: 15px; margin: 0 0 12px; }
   .sub { color: var(--ink-2); margin: 0 0 20px; }
   .card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 16px; }
@@ -68,8 +74,16 @@
 </head>
 <body>
 <main>
-  <h1>Synthetic data viewer</h1>
-  <p class="sub" id="source">Loading...</p>
+  <header>
+    <div>
+      <h1>Synthetic data viewer</h1>
+      <p class="sub" id="source">Loading...</p>
+    </div>
+    <div class="sync">
+      <span id="sync-status" aria-live="polite"></span>
+      <button type="button" id="sync">Sync</button>
+    </div>
+  </header>
   <div class="tiles" id="tiles"></div>
   <nav role="tablist">
     <button role="tab" aria-selected="true" data-tab="mix">Sector mix</button>
@@ -141,6 +155,7 @@ const CHANGES = {
 
 let selected = null;
 let sectors = [];
+let shown = null;
 
 function tiles(s) {
   const linked = s.people ? Math.round((s.linked_people / s.people) * 100) : 0;
@@ -265,6 +280,53 @@ async function showCheck() {
     <p class="muted">${c.untouched} other record(s) in the source were left out.</p>`;
 }
 
+function currentTab() {
+  return document.querySelector('nav button[aria-selected="true"]').dataset.tab;
+}
+
+async function loadAll() {
+  const [summary, rows] = await Promise.all([get("/api/summary"), get("/api/sectors")]);
+  sectors = rows;
+  if (selected && !rows.some((r) => r.code === selected)) selected = null;
+  tiles(summary);
+  await render();
+  tab(currentTab());
+}
+
+const pause = (ms) => new Promise((done) => setTimeout(done, ms));
+
+function syncStatus(s) {
+  $("#sync").disabled = s.syncing;
+  $("#sync").textContent = s.syncing ? "Syncing..." : "Sync";
+  const read = s.read_at ? `Read ${new Date(s.read_at).toLocaleString()}` : "";
+  $("#sync-status").innerHTML = s.error
+    ? `<span class="error">Sync failed: ${esc(s.error)}</span>${read ? ` · ${read}` : ""}`
+    : s.syncing ? (s.read_at ? `${read} · reading again` : "Reading the data, this can take a minute or two") : read;
+}
+
+// Waits for a running read, then shows the new data if there is some.
+async function follow() {
+  let s = await get("/api/sync");
+  syncStatus(s);
+  while (s.syncing) {
+    await pause(2000);
+    s = await get("/api/sync");
+    syncStatus(s);
+  }
+  if (s.read_at && s.read_at !== shown) {
+    shown = s.read_at;
+    await loadAll();
+  } else if (!s.read_at) {
+    $("#source").innerHTML = `<span class="error">No data: ${esc(s.error || "nothing was read")}</span>`;
+  }
+}
+
+async function sync() {
+  const response = await fetch("/api/sync", { method: "POST", headers: { "X-Viewer-Sync": "1" } });
+  if (!response.ok) throw new Error(`/api/sync: HTTP ${response.status}`);
+  await follow();
+}
+
 function tab(name) {
   for (const b of document.querySelectorAll("nav button")) b.setAttribute("aria-selected", b.dataset.tab === name);
   for (const t of ["mix", "dups", "check"]) $(`#tab-${t}`).hidden = t !== name;
@@ -294,17 +356,14 @@ document.addEventListener("mousemove", (e) => {
 $("#orgs-filter").addEventListener("input", () => filter("orgs"));
 $("#people-filter").addEventListener("input", () => filter("people"));
 addEventListener("resize", () => sectors.length && chart(sectors));
+const failed = (error) => {
+  $("#sync-status").innerHTML = `<span class="error">Could not load the data: ${esc(error.message)}</span>`;
+  $("#sync").disabled = false;
+  $("#sync").textContent = "Sync";
+};
+$("#sync").addEventListener("click", () => sync().catch(failed));
 
-(async () => {
-  try {
-    const [summary, rows] = await Promise.all([get("/api/summary"), get("/api/sectors")]);
-    sectors = rows;
-    tiles(summary);
-    await render();
-  } catch (error) {
-    $("#source").innerHTML = `<span class="error">Could not load the data: ${esc(error.message)}</span>`;
-  }
-})();
+follow().catch(failed);
 </script>
 </body>
 </html>

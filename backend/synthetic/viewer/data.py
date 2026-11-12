@@ -4,7 +4,8 @@
 import json
 import logging
 from collections import Counter
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,7 @@ class Dataset:
     truth: dict[str, Any] = field(default_factory=dict)
     # Records in the source without an external id from this mix.
     untouched: int = 0
+    read_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat(timespec="seconds"))
 
 
 def classify_name(name: str) -> str:
@@ -125,6 +127,34 @@ def load_omerlo(writer: OmerloWriter, target: Target, plan: Plan | None) -> Data
     return Dataset("omerlo: " + target.base_url, orgs, people, truth, other_orgs + other_people)
 
 
+def save_records(data: Dataset, path: Path) -> None:
+    """Keep what was read, so the next start does not have to read the source again."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    saved = {
+        "source": data.source,
+        "read_at": data.read_at,
+        "organizations": [asdict(o) for o in data.organizations],
+        "people": [asdict(p) for p in data.people],
+        "untouched": data.untouched,
+    }
+    partial = path.with_suffix(".partial")
+    partial.write_text(json.dumps(saved, ensure_ascii=False), encoding="utf-8")
+    partial.replace(path)
+
+
+def read_records(path: Path, truth: dict[str, Any]) -> Dataset:
+    """Records saved by save_records; the truth comes from the plan, which may have changed."""
+    saved = read_json(path)
+    return Dataset(
+        saved["source"],
+        [Org(**o) for o in saved["organizations"]],
+        [Person(**p) for p in saved["people"]],
+        truth,
+        saved["untouched"],
+        saved["read_at"],
+    )
+
+
 def duplicate_copies(truth: dict[str, Any], kind: str) -> set[str]:
     """External ids of the second record of each planted pair."""
     return {pair["external_ids"][1] for pair in truth.get(f"{kind}_duplicates", [])}
@@ -138,6 +168,7 @@ class View:
         self.names = sectors()
         self.sector_of = {o.external_id: classify_name(o.name) for o in data.organizations}
         self.org_names = {o.external_id: o.name for o in data.organizations}
+        self.sector_codes = set(self.sector_of.values()) | set(data.truth.get("gaps", {}))
         self.copies = duplicate_copies(data.truth, "organization") | duplicate_copies(
             data.truth, "person"
         )
