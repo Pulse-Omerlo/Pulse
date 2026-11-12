@@ -22,6 +22,7 @@ from app.ingestion.omerlo.mapping.batch import map_records
 from app.models import SectorMixResult, Source, SourceRecord, SyncRun
 from app.processing.entity_resolution import MatchResult, match_organizations
 from app.processing.person_resolution import match_people
+from app.services.affiliations import AffiliationReport, link_people, linked_people
 from app.services.industry import ClassificationReport, classify_organizations
 from app.services.link_recheck import LINK_RECHECK_KEY, RecheckResult, recheck_links
 from app.services.record_changes import record_changes
@@ -52,6 +53,8 @@ ChangeDetector = Callable[[Session, SyncRun], dict[str, int]]
 Classifier = Callable[[Session, uuid.UUID], ClassificationReport]
 # Computes and stores the tenant's sector mix for the run, after classification.
 MixMeasurer = Callable[[Session, SyncRun], SectorMixResult]
+# Links the tenant's people to the organizations they work for, after matching.
+Affiliator = Callable[[Session, uuid.UUID], AffiliationReport]
 # Drops automatic org links whose evidence failed after versioning carried them.
 Rechecker = Callable[[Session, SyncRun, list[tuple[uuid.UUID, uuid.UUID]]], RecheckResult]
 
@@ -121,6 +124,7 @@ def run_sync(
     full: bool = False,
     detect_changes: ChangeDetector = record_changes,
     recheck: Rechecker | None = None,
+    affiliate: Affiliator | None = None,
     classify: Classifier | None = None,
     measure: MixMeasurer | None = None,
     now: Callable[[], datetime] = utc_now,
@@ -176,10 +180,11 @@ def run_sync(
             session.commit()
         if run.status == "succeeded":
             match_after_sync(session, run)
+            affiliate_after_sync(session, run, affiliate or link_people)
             classify_after_sync(session, run, classify or classify_organizations)
             # Measured even when classification failed, from the sectors already stored.
             after_sync(
-                session, run, "sector mix", lambda: (measure or measure_sector_mix)(session, run)
+                session, run, "sector mix", lambda: (measure or measure_with_people)(session, run)
             )
         # Loaded while still bound, so callers can read the run after the scope ends.
         session.refresh(run)
@@ -252,6 +257,18 @@ def match_after_sync(session: Session, run: SyncRun) -> MatchResult | None:
     run.counts = counts
     session.commit()
     return result
+
+
+def affiliate_after_sync(session: Session, run: SyncRun, affiliate: Affiliator) -> None:
+    """Link people to organizations and save the counts on the run; a failure is logged."""
+    report = after_sync(session, run, "affiliations", lambda: affiliate(session, run.tenant_id))
+    if report is not None:
+        run.counts = {**(run.counts or {}), "affiliations": report.as_counts()}
+        session.commit()
+
+
+def measure_with_people(session: Session, run: SyncRun) -> SectorMixResult:
+    return measure_sector_mix(session, run, linked_people)
 
 
 def classify_after_sync(session: Session, run: SyncRun, classify: Classifier) -> None:
