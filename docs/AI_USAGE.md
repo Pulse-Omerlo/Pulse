@@ -38,6 +38,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Claude Code (Anthropic) | AbdelrahmanWM | Writing code and tests from issues, reviewing diffs, drafting PR descriptions and issues |
 | Cursor (agent mode) | mijanullah12 | Designing and writing the file import and its tests from issue #24, the Omerlo deletion handling from issue #119, drafting commit messages and docs |
 | Cursor (agent mode) | hendriktebeng | Implementing automatic org-link recheck (#110) and people matching (#112) |
+| Claude Code (Anthropic) | AndrewRazvan | Writing the tenant isolation, security checks, sync scheduling, error reporting and Fly.io deploy code and their tests from issues; looking up Fly.io settings and prices; drafting PR descriptions, issues and commit messages |
 
 ## Features built with substantial AI help
 
@@ -60,6 +61,12 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Tier 2 fuzzy matching of organizations | #111 | |
 | Deleted Omerlo records and dropped event sessions | #119 | |
 | Match people with name plus a secondary identifier | #112 | |
+| Tenant isolation of every app session | #59 | #143 |
+| Request size limits and the raw SQL guard | #22 | #140 |
+| Secret scan and dependency audit in CI | #22 | #175 |
+| Sync of every source with a per-source lock | #66 | #176 |
+| Error reporting to Sentry | #174 | #177 |
+| Fly.io deploy behind a shared password | #64, #65 | #178 |
 
 ## Details
 
@@ -387,3 +394,53 @@ are waived for this PR.
 sync wiring and person recheck fields. Integration tests (when
 `TEST_DATABASE_URL` is set) cover people links, copy-on-version and isolation
 graph coverage.
+
+### Tenant isolation and the security baseline (#143, #140)
+
+Claude Code wrote `TenantSession` and its tenant filter, the integration tests
+that sync two tenants and call every tenant route with the other tenant's ids,
+the request size limit and the test that fails on raw SQL built from strings.
+
+**Verification:** the isolation tests fail when a new tenant route or table has
+no check. Anthony's review found gaps in the raw SQL guard (SQL built on an
+earlier line or passed by keyword) and in the size limit (non-ASCII digits in
+`Content-Length`); both were fixed with tests.
+
+### Sync of every source with a per-source lock (#176)
+
+Claude Code wrote `sync --all`, the advisory lock in `services/sync_lock.py` and
+their tests.
+
+**Verification:** integration tests against Postgres and the mock Omerlo server:
+both demo tenants sync, a locked source is skipped, and a failing source leaves
+the others synced and exits with 1.
+
+**Problem found:** the first version printed each run after the loop, but the
+next source's commit expires the earlier run, and reloading it outside its
+tenant was refused by `TenantSession`. Each result line is now read right after
+its run, while the session is bound to that tenant.
+
+### Error reporting to Sentry (#177)
+
+Claude Code wrote `core/monitoring.py`, the structlog processor that sends logged
+exceptions, and their tests.
+
+**Verification:** besides the unit tests, an error route was checked by hand
+with a capturing transport: one event with its stack trace, no local variables
+or IP address, and the API key header and cookies filtered.
+
+**Problem found:** with Sentry's default logging integration, our structlog
+errors arrived as a message holding the whole log dict, with no stack trace and
+before `mask_sensitive_data` runs. That integration is off, and the processor
+sends the exception itself.
+
+### Fly.io deploy behind a shared password (#178)
+
+Claude Code drafted the `fly.toml` files, the production UI image, the nginx
+password and API proxy, the deploy workflow, and looked up the Fly.io settings
+and prices.
+
+**Verification:** the UI image was run locally against a stand-in API: wrong or
+missing passwords get 401, the API receives requests without the
+`Authorization` header, and the container stops when the password is not set.
+The first real deploy is still to do.
