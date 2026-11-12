@@ -43,6 +43,48 @@ jobs:
           git fetch --no-tags --depth=1 origin main
           python scripts/ai_declarations.py --base FETCH_HEAD
 
+  # Scans every commit for keys and passwords. The gitleaks action needs a paid
+  # license for organization repos, so this runs the released binary instead.
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: 8.30.1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        working-directory: ${{ runner.temp }}
+        run: |
+          base="https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}"
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -sSfLO "$base/$archive"
+          curl -sSfLO "$base/gitleaks_${GITLEAKS_VERSION}_checksums.txt"
+          grep " $archive\$" "gitleaks_${GITLEAKS_VERSION}_checksums.txt" | sha256sum -c -
+          tar -xzf "$archive" gitleaks
+      - run: ${{ runner.temp }}/gitleaks git --redact --no-banner .
+
+  # Fails on known vulnerabilities in the locked dependencies.
+  dependency-audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.3
+      - name: Backend (all locked packages)
+        working-directory: backend
+        run: |
+          uv export --frozen --no-emit-project --format requirements-txt > "$RUNNER_TEMP/requirements.txt"
+          uvx pip-audit==2.10.1 -r "$RUNNER_TEMP/requirements.txt" --require-hashes --disable-pip --progress-spinner off
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+      # Only what ships in the UI image; dev tools such as ESLint are left out.
+      - name: Frontend (production packages, high severity and above)
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+
   backend-tests:
     name: Backend tests
     runs-on: ubuntu-latest
