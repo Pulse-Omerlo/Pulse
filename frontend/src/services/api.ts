@@ -254,3 +254,63 @@ export function getOrganizationTimeline(
     `/api/tenants/${tenantId}/organizations/${organizationId}/timeline`,
   );
 }
+
+export interface MixOrganization {
+  key: string;
+  name: string;
+  records: string[];
+  // The organization page to open, or the record when it matched no other.
+  organization_id: string | null;
+  record: RecordRef | null;
+}
+
+export interface MixPerson {
+  id: string;
+  name: string;
+  organization: string | null;
+}
+
+export interface SectorShare {
+  code: string;
+  name: string;
+  organization_count: number;
+  organization_share: number;
+  // Null while people are not linked to organizations.
+  people_count: number | null;
+  people_share: number | null;
+  target: number | null;
+  organizations: MixOrganization[];
+  people: MixPerson[] | null;
+}
+
+export type GapKind = "too_few_organizations" | "too_few_people" | "below_target";
+
+export interface Gap {
+  code: string;
+  kind: GapKind;
+  // Percentage points.
+  size: number;
+  explanation: string;
+}
+
+export interface SectorMix {
+  sync_run_id: string;
+  computed_at: string;
+  settings: { gap_points: number; targets: Record<string, number>; version: string };
+  organizations: number;
+  classified: number;
+  people_status: "linked" | "not_linked";
+  people: number;
+  sectors: SectorShare[];
+  gaps: Gap[];
+  unclassified: MixOrganization[];
+  people_unplaced: MixPerson[];
+}
+
+// The latest sector mix, or the one computed after `runId`.
+export function getSectorMix(tenantId: string, runId?: string): Promise<SectorMix> {
+  const path = runId
+    ? `/api/tenants/${tenantId}/runs/${runId}/sector-mix`
+    : `/api/tenants/${tenantId}/sector-mix`;
+  return request<SectorMix>(path);
+}

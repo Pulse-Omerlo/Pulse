@@ -1,0 +1,160 @@
+.sector-mix {
+  /* Categorical slots 1 and 2, validated on the light and dark page surfaces. */
+  --series-organizations: #2a78d6;
+  --series-people: #eb6834;
+  --target: var(--text-h);
+}
+
+@media (prefers-color-scheme: dark) {
+  .sector-mix {
+    --series-organizations: #3987e5;
+    --series-people: #d95926;
+  }
+}
+
+.mix-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 1.5rem;
+  align-items: start;
+}
+
+@media (max-width: 800px) {
+  .mix-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.sector-chart {
+  margin: 0;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+  color: var(--text);
+}
+
+.swatch {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+.target-swatch {
+  width: 2px;
+  background: var(--target);
+}
+
+.sector-rows,
+.gap-list,
+.name-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sector-mix .sector-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 2fr) minmax(0, 3fr);
+  gap: 0.75rem;
+  align-items: center;
+  width: 100%;
+  margin-bottom: 2px;
+  border-color: transparent;
+  text-align: left;
+}
+
+.sector-mix .sector-row:hover,
+.sector-mix .gap:hover {
+  border-color: var(--border);
+}
+
+.sector-mix .sector-row.selected,
+.sector-mix .gap.selected {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.sector-bars {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.bar-line {
+  display: grid;
+  grid-template-columns: 1fr 3.5rem;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.bar-track {
+  position: relative;
+  height: 0.6rem;
+}
+
+.bar {
+  display: block;
+  height: 100%;
+  min-width: 1px;
+  border-radius: 0 4px 4px 0;
+}
+
+.bar-organizations {
+  background: var(--series-organizations);
+}
+
+.bar-people {
+  background: var(--series-people);
+}
+
+.bar-value {
+  color: var(--text-h);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.target {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: var(--target);
+}
+
+.sector-mix .gap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+  margin-bottom: 0.5rem;
+  text-align: left;
+}
+
+.gap-heading {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.gap-size {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.gap-kind {
+  color: var(--text);
+}
+
+.sector-detail,
+.unclassified {
+  margin-top: 1.5rem;
+}
+
+.name-list li {
+  padding: 0.15rem 0;
+}
