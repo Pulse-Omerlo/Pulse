@@ -4,6 +4,10 @@
 
 SOEN 490 Capstone Project
 
+## Diversity Statement
+
+PULSE is committed to promoting equity, diversity, and inclusion. We will be providing transparent, and accessible information to all users based on what they should be allowed to see. We will include smaller and regional organizations, with the goal of reducing representation bias and ensuring we have different perspectives. We also aim to make PULSE accessible to users regardless of their language, abilities, or technical background.
+
 ## Local development with Docker
 
 ### Prerequisites
