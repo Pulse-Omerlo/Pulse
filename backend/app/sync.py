@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_session_factory
 from app.core.logging import configure_logging
+from app.core.monitoring import configure_sentry
 from app.core.tenancy import bound_to_tenant, system_access
 from app.ingestion.omerlo.client import create_omerlo_client
 from app.ingestion.omerlo.connector import OmerloConnector
@@ -109,6 +110,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     args = parser.parse_args(argv)
     configure_logging()
+    configure_sentry()
 
     with get_session_factory()() as session:
         try:

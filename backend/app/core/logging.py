@@ -10,6 +10,8 @@ from typing import Any, TextIO
 
 import structlog
 
+from app.core.monitoring import report_errors_to_sentry
+
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
 DEFAULT_LOG_LEVEL = "INFO"
 
@@ -94,6 +96,7 @@ def configure_logging(level: str | None = None, stream: TextIO | None = None) ->
     structlog.configure(
         processors=[
             structlog.stdlib.filter_by_level,
+            report_errors_to_sentry,
             *shared_processors,
             structlog.stdlib.PositionalArgumentsFormatter(),
             structlog.stdlib.ProcessorFormatter.wrap_for_formatter,

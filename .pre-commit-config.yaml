@@ -12,6 +12,12 @@ repos:
       - id: check-merge-conflict
       - id: check-added-large-files
 
+  # Checks staged changes for keys and passwords before they are committed.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.17.1
     hooks:

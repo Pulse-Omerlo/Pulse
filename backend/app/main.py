@@ -1,3 +1,4 @@
+# AI contribution: 50% or more AI-generated
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -9,6 +10,7 @@ from app.api import auth, browse, organizations, sector_mix
 from app.core.database import DatabaseNotConfiguredError, check_database
 from app.core.errors import UnhandledErrorMiddleware, register_exception_handlers
 from app.core.logging import configure_logging, get_logger
+from app.core.monitoring import configure_sentry
 from app.core.request_context import RequestContextMiddleware
 from app.core.security import (
     RequestSizeLimitMiddleware,
@@ -18,6 +20,7 @@ from app.core.security import (
 )
 
 configure_logging()
+configure_sentry()
 logger = get_logger(__name__)
 
 
