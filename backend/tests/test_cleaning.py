@@ -9,11 +9,11 @@ import pytest
 from app.processing.cleaning import (
     CleaningConfig,
     FieldRule,
-    _convert,
     clean_records,
     remove_duplicates,
 )
 from app.processing.cleaning_config import get_cleaning_config
+from app.processing.cleaning_values import _convert
 
 
 def test_empty_batch():

@@ -22,8 +22,7 @@ from dataclasses import dataclass, field
 import polars as pl
 
 from app.processing.cleaning_columns import BROKEN_ENCODING, convert_strings, text_plan
-from app.processing.cleaning_values import FALSE_VALUES, TRUE_VALUES
-from app.processing.cleaning_values import _convert as _convert
+from app.processing.cleaning_values import FALSE_VALUES, TRUE_VALUES, _convert
 
 DUPLICATE_IN_BATCH_REASON = "duplicate in current batch"
 

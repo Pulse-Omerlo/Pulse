@@ -53,9 +53,6 @@ class MappingResult:
     cleaning_flag_counts: dict[str, int] = field(default_factory=dict)
 
 
-# AI helped me suggest better ways of coding or traversings loops I had.
-# Ai completed the function after the records were cleaned by recycling old logic and
-# making it work with the new logic.
 def clean_mapped(
     mapped: Iterable[MappedRecord], failures: Iterable[MappingFailure] = ()
 ) -> MappingResult:
@@ -88,7 +85,6 @@ def clean_mapped(
             {name: getattr(records[index], name) for name in config.fields} for index in indices
         ]
         # Clean the whole group using Polars and connect back to their original indices using zip()
-        # (AI suggested this line of code)
         for index, result in zip(indices, clean_scalar_batch(values, config), strict=True):
             by_index[index] = result
     # Initilialize cleaned MappedRecords that are now duplicate candidates
