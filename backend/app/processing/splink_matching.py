@@ -4,6 +4,8 @@
 import logging
 from collections import defaultdict
 
+# Splink is a dev dependency, not installed in the app image. Only dev commands such as
+# app.splink_report may import this module; the API and the sync pipeline must not.
 import splink.comparison_library as cl
 from splink import DuckDBAPI, Linker, SettingsCreator, block_on
 
