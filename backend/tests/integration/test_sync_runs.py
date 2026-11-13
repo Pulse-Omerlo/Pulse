@@ -500,6 +500,103 @@ def test_sync_command_rejects_an_unknown_tenant(migrated_database, capsys):
     assert "No tenant 'nobody'" in capsys.readouterr().err
 
 
+def seed_both_tenants(engine, tmp_path, monkeypatch):
+    """Seed the two demo tenants and their mock sources, and archive to a temporary folder."""
+    with Session(engine) as setup:
+        seed(setup)
+        setup.commit()
+    monkeypatch.setenv("ARCHIVE_DIR", str(tmp_path / "archive"))
+
+
+def client_for_each_tenant(mock_app, failing_slug=None):
+    """Mock clients that use each source's own tenant; one tenant can be made to fail."""
+
+    def create(settings):
+        slug = settings.api_key.get_secret_value().removeprefix("mock-")
+        if slug == failing_slug:
+            return mock_client(mock_app, "nobody")
+        return mock_client(mock_app, slug)
+
+    return create
+
+
+def runs_by_tenant(engine) -> dict[str, list[str]]:
+    """The status of every sync run, by tenant slug."""
+    result = {}
+    with Session(engine) as check:
+        rows = check.execute(
+            select(Tenant.omerlo_media_id, SyncRun.status).join(
+                SyncRun, SyncRun.tenant_id == Tenant.id
+            )
+        ).all()
+    for slug, status in rows:
+        result.setdefault(slug, []).append(status)
+    return result
+
+
+def test_sync_all_syncs_every_active_source_of_every_tenant(
+    migrated_database, mock_app, tmp_path, monkeypatch, capsys
+):
+    # Arrange
+    seed_both_tenants(migrated_database, tmp_path, monkeypatch)
+    monkeypatch.setattr(sync_command, "create_omerlo_client", client_for_each_tenant(mock_app))
+
+    # Act
+    sync_command.main(["--all", "--full"])
+
+    # Assert
+    lines = [line for line in capsys.readouterr().out.splitlines() if "Sync run" in line]
+    assert len(lines) == 2
+    assert all("(full) succeeded" in line for line in lines)
+    assert runs_by_tenant(migrated_database) == {
+        "demo-capitale": ["succeeded"],
+        "demo-estrie": ["succeeded"],
+    }
+
+
+def test_sync_all_skips_a_paused_source(migrated_database, mock_app, tmp_path, monkeypatch, capsys):
+    # Arrange
+    seed_both_tenants(migrated_database, tmp_path, monkeypatch)
+    with Session(migrated_database) as setup:
+        paused = setup.scalars(
+            select(Source)
+            .join(Tenant, Tenant.id == Source.tenant_id)
+            .where(Tenant.omerlo_media_id == "demo-estrie")
+        ).one()
+        paused.config = {**paused.config, "active": False}
+        setup.commit()
+    monkeypatch.setattr(sync_command, "create_omerlo_client", client_for_each_tenant(mock_app))
+
+    # Act
+    sync_command.main(["--all"])
+
+    # Assert
+    assert runs_by_tenant(migrated_database) == {"demo-capitale": ["succeeded"]}
+
+
+def test_one_failing_source_does_not_stop_the_others(
+    migrated_database, mock_app, tmp_path, monkeypatch, capsys
+):
+    # Arrange
+    seed_both_tenants(migrated_database, tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        sync_command,
+        "create_omerlo_client",
+        client_for_each_tenant(mock_app, failing_slug="demo-capitale"),
+    )
+
+    # Act
+    with pytest.raises(SystemExit) as exit_info:
+        sync_command.main(["--all"])
+
+    # Assert
+    assert exit_info.value.code == 1
+    assert runs_by_tenant(migrated_database) == {
+        "demo-capitale": ["failed"],
+        "demo-estrie": ["succeeded"],
+    }
+
+
 def test_a_sync_classifies_every_current_organization(session, sync):
     # Act
     run = sync(full=True)

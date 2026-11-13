@@ -3,6 +3,7 @@ import uuid
 
 import pytest
 
+from app import sync as sync_command
 from app.models import Source, SyncRun, Tenant
 from app.seed import MOCK_OMERLO_BASE_URL
 from app.sync import SyncCommandError, omerlo_settings, summary
@@ -77,3 +78,71 @@ def test_summary_lists_the_counts_and_the_error():
         f"Sync run {run.id} (incremental) failed: fetched 3, new 0, changed 0, unchanged 0, "
         "removed 0, failed 0\nOmerloAuthError: rejected"
     )
+
+
+def a_run(status):
+    return SyncRun(id=uuid.uuid4(), mode="incremental", status=status, counts={})
+
+
+def test_sync_all_keeps_going_after_a_source_fails(mocker, capsys):
+    # Arrange
+    session = mocker.MagicMock(info={})
+    pairs = [
+        (uuid.uuid4(), uuid.uuid4()),
+        (uuid.uuid4(), uuid.uuid4()),
+        (uuid.uuid4(), uuid.uuid4()),
+    ]
+    mocker.patch.object(sync_command, "active_sources", return_value=pairs)
+    synced = mocker.patch.object(
+        sync_command,
+        "sync_source",
+        side_effect=[a_run("succeeded"), RuntimeError("connection refused"), a_run("succeeded")],
+    )
+
+    # Act
+    succeeded = sync_command.sync_all(session, full=False)
+
+    # Assert
+    assert succeeded is False
+    assert synced.call_count == 3
+    assert "not synced: connection refused" in capsys.readouterr().out
+    session.rollback.assert_called_once()
+
+
+def test_sync_all_fails_when_a_run_fails(mocker):
+    # Arrange
+    session = mocker.MagicMock(info={})
+    pairs = [(uuid.uuid4(), uuid.uuid4()), (uuid.uuid4(), uuid.uuid4())]
+    mocker.patch.object(sync_command, "active_sources", return_value=pairs)
+    mocker.patch.object(
+        sync_command, "sync_source", side_effect=[a_run("succeeded"), a_run("failed")]
+    )
+
+    # Act / Assert
+    assert sync_command.sync_all(session, full=False) is False
+
+
+def test_sync_all_succeeds_when_every_run_succeeds(mocker):
+    # Arrange
+    session = mocker.MagicMock(info={})
+    pairs = [(uuid.uuid4(), uuid.uuid4()), (uuid.uuid4(), uuid.uuid4())]
+    mocker.patch.object(sync_command, "active_sources", return_value=pairs)
+    synced = mocker.patch.object(sync_command, "sync_source", return_value=a_run("succeeded"))
+
+    # Act
+    succeeded = sync_command.sync_all(session, full=True)
+
+    # Assert
+    assert succeeded is True
+    assert all(call.kwargs == {"full": True} for call in synced.call_args_list)
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [[], ["--tenant", "demo-capitale", "--all"], ["--all", "--source", str(uuid.uuid4())]],
+)
+def test_the_command_needs_either_a_tenant_or_all(argv):
+    # Act / Assert
+    with pytest.raises(SystemExit) as exit_info:
+        sync_command.main(argv)
+    assert exit_info.value.code == 2
