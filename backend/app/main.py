@@ -1,3 +1,4 @@
+# AI contribution: 50% or more AI-generated
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 

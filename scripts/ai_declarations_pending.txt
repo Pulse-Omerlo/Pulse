@@ -83,10 +83,7 @@ frontend/src/services/api.test.ts
 
 # AbdelrahmanWM, mijanullah12, TristanGirardi, Youssef Youssef
 backend/tests/test_health.py
-frontend/src/App.tsx
 frontend/src/services/api.ts
-
-# TristanGirardi
 
 # AbdelrahmanWM, Mohamad Addasi
 backend/app/models/records.py
@@ -95,9 +92,6 @@ backend/app/models/tenancy.py
 # Andrew Ungureanu
 backend/app/core/security.py
 backend/tests/core/test_security.py
-
-# AbdelrahmanWM, Andrew Ungureanu, mijanullah12, TristanGirardi, Youssef Youssef
-backend/app/main.py
 
 # AbdelrahmanWM, Mohamad Addasi, Youssef Youssef
 scripts/tickets/data.py
