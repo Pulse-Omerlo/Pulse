@@ -1,0 +1,44 @@
+# Filled in at container start: nginx's image replaces ${API_UPSTREAM} from the environment.
+server {
+    listen 8080;
+    server_name _;
+    root /usr/share/nginx/html;
+    server_tokens off;
+
+    # Until PULSE has its own login, one shared username and password protects the UI and,
+    # through the proxy below, the API. The password file is written by docker/basic-auth.sh.
+    auth_basic "PULSE";
+    auth_basic_user_file /etc/nginx/htpasswd;
+
+    # nginx drops server-level add_header in any location that sets its own, so each
+    # location repeats the security headers.
+    location = /healthz {
+        auth_basic off;
+        access_log off;
+        return 200 "ok\n";
+    }
+
+    # The API has no public address; the UI reaches it through this proxy only.
+    location /api/ {
+        proxy_pass ${API_UPSTREAM};
+        # The shared password stays here and never reaches the API or its logs.
+        proxy_set_header Authorization "";
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Hashed build assets never change, so browsers can keep them.
+    location /assets/ {
+        add_header Cache-Control "public, max-age=31536000, immutable";
+        add_header X-Content-Type-Options "nosniff" always;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+        add_header Cache-Control "no-cache";
+        add_header X-Content-Type-Options "nosniff" always;
+        add_header X-Frame-Options "DENY" always;
+        add_header Content-Security-Policy "frame-ancestors 'none'" always;
+        add_header Referrer-Policy "no-referrer" always;
+    }
+}

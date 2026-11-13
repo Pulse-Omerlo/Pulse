@@ -1,0 +1,24 @@
+# Production image: builds the static site and serves it with nginx (Fly.io, compose uses Dockerfile).
+
+FROM node:22-alpine AS build
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+
+# Vite inlines VITE_* variables at build time, so the API URL is a build argument.
+ARG VITE_API_URL
+ENV VITE_API_URL=$VITE_API_URL
+RUN npm run build
+
+FROM nginx:1.29-alpine
+
+# The image fills in templates and runs the entrypoint scripts before nginx starts.
+COPY nginx.conf.template /etc/nginx/templates/default.conf.template
+COPY docker/basic-auth.sh /docker-entrypoint.d/25-basic-auth.sh
+COPY --from=build /app/dist /usr/share/nginx/html
+
+EXPOSE 8080

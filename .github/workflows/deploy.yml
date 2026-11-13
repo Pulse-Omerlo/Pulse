@@ -1,0 +1,57 @@
+name: Deploy
+
+# Deploys main to Fly.io once CI has passed on it. Off until the repository variable
+# FLY_DEPLOY_ENABLED is set to true, so nothing runs before the Fly.io apps exist.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time; a newer push waits instead of racing the running one.
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+
+jobs:
+  api:
+    name: Deploy API
+    if: >-
+      vars.FLY_DEPLOY_ENABLED == 'true' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push'))
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The commit CI passed on, not whatever main points at now.
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: superfly/flyctl-actions/setup-flyctl@1.6
+      # Runs alembic upgrade head first; a failed migration stops the deploy.
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_PULSE_DEPLOY_TOKEN }}
+
+  ui:
+    name: Deploy UI
+    needs: api
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: superfly/flyctl-actions/setup-flyctl@1.6
+      - run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_PULSE_DEPLOY_TOKEN }}
