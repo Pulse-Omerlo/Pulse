@@ -15,6 +15,7 @@ import {
 import { ErrorMessage } from "../ErrorMessage";
 import { GoalsView } from "../goals/GoalsView";
 import { OrganizationsView } from "../organizations/OrganizationsView";
+import { SectorMixView } from "../sectorMix/SectorMixView";
 import { ChangeList } from "./ChangeList";
 import { RecordHistoryPanel } from "./RecordHistoryPanel";
 import { RunList } from "./RunList";
@@ -30,7 +31,8 @@ export function SyncRunsPage() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<RecordSummary[] | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const [view, setView] = useState<"goals" | "runs" | "organizations">("runs");
+  const [view, setView] = useState<"goals" | "runs" | "sectorMix" | "organizations">("runs");
+  const [openOrganizationId, setOpenOrganizationId] = useState<string | null>(null);
 
   const selectRun = (selected: SyncRun | null, tenant: string | null = tenantId) => {
     setRun(selected);
@@ -118,6 +120,17 @@ export function SyncRunsPage() {
           >
             Sync runs
           </button>
+          <button
+            type="button"
+            aria-pressed={view === "sectorMix"}
+            className={view === "sectorMix" ? "filter active" : "filter"}
+            onClick={() => {
+              setView("sectorMix");
+              setHistory(null);
+            }}
+          >
+            Sector mix
+          </button>
           <span className="flow" aria-label="Events contain organizations, which contain people">
             <button type="button" className="filter" disabled title="Coming soon">
               Events
@@ -129,6 +142,7 @@ export function SyncRunsPage() {
               className={view === "organizations" ? "filter active" : "filter"}
               onClick={() => {
                 setView("organizations");
+                setOpenOrganizationId(null);
                 setHistory(null);
               }}
             >
@@ -176,11 +190,31 @@ export function SyncRunsPage() {
 
       {view === "goals" ? (
         <GoalsView />
+      ) : view === "sectorMix" && tenantId ? (
+        history ? (
+          <RecordHistoryPanel history={history} runs={runs} onClose={() => setHistory(null)} />
+        ) : (
+          <SectorMixView
+            key={tenantId}
+            tenantId={tenantId}
+            runs={runs}
+            onOpenOrganization={(id) => {
+              setOpenOrganizationId(id);
+              setView("organizations");
+            }}
+            onOpenRecord={openRecord}
+          />
+        )
       ) : view === "organizations" && tenantId ? (
         history ? (
           <RecordHistoryPanel history={history} runs={runs} onClose={() => setHistory(null)} />
         ) : (
-          <OrganizationsView key={tenantId} tenantId={tenantId} onOpenRecord={openRecord} />
+          <OrganizationsView
+            key={`${tenantId}/${openOrganizationId}`}
+            tenantId={tenantId}
+            onOpenRecord={openRecord}
+            initialOrganizationId={openOrganizationId}
+          />
         )
       ) : (
         <div className="columns">

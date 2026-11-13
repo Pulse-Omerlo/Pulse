@@ -104,3 +104,21 @@ def test_a_network_never_synced_has_no_mix_yet(api, session):
 
     # Assert
     assert response.status_code == 404
+
+
+def test_every_organization_in_the_mix_links_to_its_page_or_its_record(api, source, sync):
+    # Arrange
+    sync(full=True)
+
+    # Act
+    mix = api.get(f"/api/tenants/{source.tenant_id}/sector-mix").json()
+
+    # Assert
+    organizations = [o for s in mix["sectors"] for o in s["organizations"]] + mix["unclassified"]
+    assert organizations
+    for organization in organizations:
+        assert (organization["organization_id"] is None) != (organization["record"] is None)
+        if organization["record"]:
+            assert organization["record"]["version_id"] == organization["key"]
+            assert organization["record"]["source_id"] == str(source.id)
+    assert any(o["organization_id"] for o in organizations)

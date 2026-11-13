@@ -4,12 +4,17 @@ from datetime import datetime
 
 from pydantic import BaseModel
 
+from app.schemas.organizations import RecordRef
+
 
 class MixOrganizationOut(BaseModel):
     # The matched organization's id, or the record version's id when it matched none.
     key: str
     name: str
     records: list[str]
+    # Where to open it: the organization page, or the record when it matched none.
+    organization_id: str | None = None
+    record: RecordRef | None = None
 
 
 class MixPersonOut(BaseModel):

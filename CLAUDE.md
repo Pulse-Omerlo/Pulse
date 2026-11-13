@@ -101,7 +101,7 @@ Tests mirror source layout: `backend/tests/core/` tests `backend/app/core/`; fro
 
 ## Frontend
 
-`src/services/api.ts` is the API client; base URL comes from `VITE_API_URL` (default `http://localhost:8000`). Vitest uses jsdom with `src/test/setup.ts`.
+`src/services/api.ts` is the API client; `src/components/sectorMix/` is the sector mix dashboard, opened from the toolbar of `SyncRunsPage`; base URL comes from `VITE_API_URL` (default `http://localhost:8000`). Vitest uses jsdom with `src/test/setup.ts`.
 
 ## Team bot architecture
 

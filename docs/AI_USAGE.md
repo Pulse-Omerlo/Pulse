@@ -62,6 +62,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Industry classification of organizations | #149 | |
 | Tenant API for organizations, runs and duplicates | #63 | |
 | Sector mix and gaps | #150 | |
+| Sector mix dashboard | #151 | |
 | Recheck automatic organization links on matching-field change | #110 | |
 | Merging organizations joined by a chain of matches | #108 | |
 | Tier 2 fuzzy matching of organizations | #111 | |
@@ -304,6 +305,25 @@ the stored organizations and classifications.
 **Problem found:** the latest result was first chosen by the time it was
 computed, which is the same for every row written in one transaction. It is
 now chosen by the start of its sync run.
+
+### Sector mix dashboard (#151)
+
+Claude Code wrote the sector mix view (the bar chart with its table view, the
+gaps list, the sector details and the run picker), its API client calls, the
+link from the sector mix to the organizations page, the API change that gives
+each organization of the mix a link to its page or record, and the tests. The
+two series colors come from a categorical palette checked with a color-vision
+validator in light and dark mode.
+
+**Verification:** component tests cover the chart order and labels, the gaps,
+opening organizations and records from a sector, people shown only when linked,
+the run picker, and the empty, loading and error states. A page test opens an
+organization from the sector mix. An integration test checks that every
+organization of a mix computed from synthetic data links to its page or record.
+
+**Problem found:** an organization that matched no other only had its record
+version id in the stored mix, which the frontend cannot open. The API now adds
+the record reference.
 
 ### Deleted Omerlo records and dropped event sessions (#119)
 

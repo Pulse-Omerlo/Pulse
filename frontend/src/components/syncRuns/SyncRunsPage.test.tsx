@@ -4,8 +4,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   ApiError,
+  getOrganization,
+  getOrganizations,
+  getOrganizationTimeline,
   getRecordHistory,
   getRunChanges,
+  getSectorMix,
   getRuns,
   getTenants,
   searchRecords,
@@ -22,6 +26,10 @@ vi.mock("../../services/api", async (importOriginal) => ({
   getRunChanges: vi.fn(),
   getRecordHistory: vi.fn(),
   searchRecords: vi.fn(),
+  getSectorMix: vi.fn(),
+  getOrganization: vi.fn(),
+  getOrganizations: vi.fn(),
+  getOrganizationTimeline: vi.fn(),
 }));
 
 const TENANT = { id: "t1", name: "Média démo Capitale", slug: "demo-capitale" };
@@ -222,5 +230,60 @@ describe("SyncRunsPage", () => {
     expect(await screen.findByRole("button", { name: "Events" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "People" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Organizations" })).toBeEnabled();
+  });
+
+  it("opens an organization's page from the sector mix", async () => {
+    // Arrange
+    vi.mocked(getSectorMix).mockResolvedValue({
+      sync_run_id: "r2",
+      computed_at: "2026-11-01T12:01:00Z",
+      settings: { gap_points: 10, targets: {}, version: "v" },
+      organizations: 1,
+      classified: 1,
+      people_status: "not_linked",
+      people: 0,
+      sectors: [
+        {
+          code: "54",
+          name: "Professional services",
+          organization_count: 1,
+          organization_share: 100,
+          people_count: null,
+          people_share: null,
+          target: null,
+          organizations: [
+            {
+              key: "org1",
+              name: "Groupe Tremblay inc.",
+              records: ["v1"],
+              organization_id: "org1",
+              record: null,
+            },
+          ],
+          people: null,
+        },
+      ],
+      gaps: [],
+      unclassified: [],
+      people_unplaced: [],
+    });
+    vi.mocked(getOrganization).mockResolvedValue({
+      id: "org1",
+      display_name: "Groupe Tremblay inc.",
+      primary_domain: "tremblay.ca",
+      records: [],
+    });
+    vi.mocked(getOrganizationTimeline).mockResolvedValue([]);
+    vi.mocked(getOrganizations).mockResolvedValue({ items: [], total: 0, page: 1, page_size: 25 });
+    render(<SyncRunsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Sector mix" }));
+
+    // Act
+    fireEvent.click(await screen.findByRole("button", { name: /^Professional services/ }));
+    fireEvent.click(screen.getByRole("button", { name: "Groupe Tremblay inc." }));
+
+    // Assert
+    expect(await screen.findByRole("region", { name: "Organization" })).toBeVisible();
+    expect(getOrganization).toHaveBeenCalledWith("t1", "org1");
   });
 });

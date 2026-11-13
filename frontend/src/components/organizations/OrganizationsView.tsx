@@ -18,9 +18,15 @@ import { formatTime } from "../syncRuns/format";
 interface OrganizationsViewProps {
   tenantId: string;
   onOpenRecord: (record: RecordRef) => void;
+  // An organization to open first, e.g. one picked on the sector mix.
+  initialOrganizationId?: string | null;
 }
 
-export function OrganizationsView({ tenantId, onOpenRecord }: OrganizationsViewProps) {
+export function OrganizationsView({
+  tenantId,
+  onOpenRecord,
+  initialOrganizationId = null,
+}: OrganizationsViewProps) {
   const [sort, setSort] = useState<OrganizationSort>("name");
   const [page, setPage] = useState(1);
   const [list, setList] = useState<Page<OrganizationSummary> | null>(null);
@@ -43,6 +49,12 @@ export function OrganizationsView({ tenantId, onOpenRecord }: OrganizationsViewP
     getOrganization(tenantId, organizationId).then(setSelected).catch(setError);
     getOrganizationTimeline(tenantId, organizationId).then(setTimeline).catch(setError);
   };
+
+  useEffect(() => {
+    if (!initialOrganizationId) return;
+    getOrganization(tenantId, initialOrganizationId).then(setSelected).catch(setError);
+    getOrganizationTimeline(tenantId, initialOrganizationId).then(setTimeline).catch(setError);
+  }, [tenantId, initialOrganizationId]);
 
   if (error !== null) return <ErrorMessage error={error} />;
 

@@ -184,3 +184,15 @@ def mix_for_run(
             SectorMixResult.tenant_id == tenant_id, SectorMixResult.sync_run_id == run_id
         )
     )
+
+
+def records_by_id(
+    session: Session, tenant_id: uuid.UUID, ids: list[uuid.UUID]
+) -> dict[str, SourceRecord]:
+    """Record versions by id, in one query, to link the organizations of a stored mix."""
+    if not ids:
+        return {}
+    records = session.scalars(
+        select(SourceRecord).where(SourceRecord.tenant_id == tenant_id, SourceRecord.id.in_(ids))
+    )
+    return {str(record.id): record for record in records}
