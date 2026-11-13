@@ -67,6 +67,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Tier 2 fuzzy matching of organizations | #111 | |
 | Deleted Omerlo records and dropped event sessions | #119 | |
 | Match people with name plus a secondary identifier | #112 | |
+| Signing users in and restricting them to their tenant | #155 | #183 |
 | Tenant isolation of every app session | #59 | #143 |
 | Request size limits and the raw SQL guard | #22 | #140 |
 | Secret scan and dependency audit in CI | #22 | #175 |
@@ -528,3 +529,23 @@ and prices.
 missing passwords get 401, the API receives requests without the
 `Authorization` header, and the container stops when the password is not set.
 The first real deploy is still to do.
+
+### Signing users in and restricting them to their tenant (#155)
+
+Claude Code wrote the user and session tables and their migration, password
+hashing and sessions, the sign-in routes and attempt limiter, the check that
+ties every tenant route to the signed-in user's tenant, the create-user
+command, the sign-in form and session handling in the UI, and the tests. It
+chose a cookie over a bearer token because the hosted UI's proxy (#178) strips
+the `Authorization` header.
+
+**Verification:** an integration test calls every tenant route of the app with
+no session, with another tenant's session and with an expired session, and
+checks 401, 404 and 401. Other integration tests cover the cookie's flags, the
+stored hashes, the same answer for a wrong password and an unknown email, the
+limit on failed attempts, and signing out. Unit tests cover the limiter and the
+settings; component tests cover the sign-in form and the app shell.
+
+**Problem found:** the existing API tests reached tenant routes with no
+session, so they now sign in through the real route as a user of the tenant
+they read.

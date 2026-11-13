@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, getHealth, getRunChanges, getRuns } from "./api";
+import { ApiError, getHealth, getMe, getRunChanges, getRuns, onUnauthorized, signIn } from "./api";
 import { logger } from "./logger";
 
 const errorBody = {
@@ -27,7 +27,10 @@ describe("getHealth", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(getHealth()).resolves.toEqual({ status: "ok", service: "pulse-backend" });
-    expect(fetchMock).toHaveBeenCalledWith(expect.stringMatching(/\/api\/health$/));
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\/api\/health$/),
+      expect.objectContaining({ credentials: "include" }),
+    );
   });
 
   it("turns the standard error body into an ApiError", async () => {
@@ -100,6 +103,7 @@ describe("paged lists", () => {
     await expect(getRuns("t1")).resolves.toEqual([{ id: "r2" }, { id: "r1" }]);
     expect(fetchMock).toHaveBeenCalledWith(
       expect.stringMatching(/\/api\/tenants\/t1\/runs\?page_size=50$/),
+      expect.anything(),
     );
   });
 
@@ -116,6 +120,7 @@ describe("paged lists", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(fetchMock).toHaveBeenLastCalledWith(
       expect.stringMatching(/\/runs\/r1\/changes\?page=2&page_size=100$/),
+      expect.anything(),
     );
   });
 
@@ -123,5 +128,51 @@ describe("paged lists", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(page([], 5, 1)));
 
     await expect(getRunChanges("t1", "r1")).resolves.toEqual([]);
+  });
+});
+
+describe("sessions", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+    onUnauthorized(null);
+  });
+
+  it("signs in with a JSON body and the cookie included", async () => {
+    // Arrange
+    const user = { email: "ana@example.ca", tenant_id: "t1", tenant_name: "Capitale" };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(user)));
+    vi.stubGlobal("fetch", fetchMock);
+
+    // Act
+    const signed = await signIn("ana@example.ca", "a long password");
+
+    // Assert
+    expect(signed).toEqual(user);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toMatch(/\/api\/auth\/login$/);
+    expect(init).toMatchObject({ method: "POST", credentials: "include" });
+    expect(JSON.parse(init.body as string)).toEqual({
+      email: "ana@example.ca",
+      password: "a long password",
+    });
+  });
+
+  it("tells the app when a request is refused for lack of a session", async () => {
+    // Arrange
+    vi.spyOn(logger, "warn").mockImplementation(() => {});
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() => Promise.resolve(new Response("{}", { status: 401 }))),
+    );
+
+    // Act
+    await getRuns("t1").catch(() => null);
+    await getMe().catch(() => null);
+
+    // Assert: only the data request counts; checking the session is expected to fail.
+    expect(handler).toHaveBeenCalledTimes(1);
   });
 });

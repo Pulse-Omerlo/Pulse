@@ -50,6 +50,16 @@ class NotFoundError(PulseError):
     code = "not_found"
 
 
+class NotAuthenticatedError(PulseError):
+    status_code = 401
+    code = "not_authenticated"
+
+
+class TooManyAttemptsError(PulseError):
+    status_code = 429
+    code = "too_many_attempts"
+
+
 class DatabaseUnavailableError(PulseError):
     status_code = 503
     code = "service_unavailable"
