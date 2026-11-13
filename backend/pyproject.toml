@@ -9,6 +9,7 @@ dependencies = [
     "fastapi==0.162.0",
     "httpx==0.28.1",
     "phonenumbers==9.0.42",
+    "polars>=2.1.0",
     "psycopg[binary]>=3.3.6",
     "pydantic==2.14.1",
     "pydantic-settings==2.16.2",
