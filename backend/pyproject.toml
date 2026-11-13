@@ -29,6 +29,7 @@ dev = [
     "pytest-mock>=3.17.0",
     "respx>=0.23.1",
     "ruff>=0.17.1",
+    "splink>=5.0.0",
 ]
 
 [tool.pytest.ini_options]
