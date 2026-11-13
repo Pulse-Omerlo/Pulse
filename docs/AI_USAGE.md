@@ -62,6 +62,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Industry classification of organizations | #149 | |
 | Tenant API for organizations, runs and duplicates | #63 | |
 | Sector mix and gaps | #150 | |
+| Linking people to the organizations they work for | #152 | |
 | Recheck automatic organization links on matching-field change | #110 | |
 | Merging organizations joined by a chain of matches | #108 | |
 | Tier 2 fuzzy matching of organizations | #111 | |
@@ -304,6 +305,27 @@ the stored organizations and classifications.
 **Problem found:** the latest result was first chosen by the time it was
 computed, which is the same for every row written in one transaction. It is
 now chosen by the start of its sync run.
+
+### Linking people to the organizations they work for (#152)
+
+Claude Code wrote the three signals (relation, work email domain, organization
+name in the job title), the conflict rule, the `affiliation` table and its
+migration, the sync step that works the links out again after matching, the
+review endpoint, and the change that places people in the sector mix. Letting a
+relation win over inferred signals, and placing a person with several
+affiliations under the most confident one, were its choices; the PR lists them
+for review.
+
+**Verification:** unit tests cover each signal, agreeing and disagreeing
+signals, shared domains, generic and personal email domains, names that are
+ordinary words, and records of one merged organization. The integration tests
+run on Postgres: evidence stored, unchanged links kept, a new person version
+checked again, a removed organization, conflicts in the API, file import
+relations, and people shares in the sector mix.
+
+**Problem found:** the first version of the query that places people read the
+organization version the link was written for, so a person could stay placed
+under an organization removed since. It now joins only current versions.
 
 ### Deleted Omerlo records and dropped event sessions (#119)
 

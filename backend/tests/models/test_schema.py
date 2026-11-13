@@ -48,6 +48,7 @@ def test_the_data_model_has_its_tables():
         "record_change",
         "industry_classification",
         "sector_mix",
+        "affiliation",
     }
 
 

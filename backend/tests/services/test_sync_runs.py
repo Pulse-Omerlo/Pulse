@@ -14,6 +14,7 @@ from app.ingestion.mapped import MappedRecord, MappingResult
 from app.models import Source
 from app.processing.entity_resolution import MatchResult
 from app.services import sync_runs
+from app.services.affiliations import AffiliationReport
 from app.services.industry import ClassificationReport
 from app.services.link_recheck import LINK_RECHECK_KEY, RecheckResult
 from app.services.source_records import UpsertResult
@@ -212,6 +213,12 @@ def matched(mocker):
 
 
 @pytest.fixture(autouse=True)
+def affiliated(mocker):
+    """People linked to organizations after matching, mocked."""
+    return mocker.patch.object(sync_runs, "link_people", return_value=AffiliationReport(linked=2))
+
+
+@pytest.fixture(autouse=True)
 def measured(mocker):
     """The sector mix computed after a successful sync, mocked."""
     return mocker.patch.object(sync_runs, "measure_sector_mix")
@@ -296,11 +303,13 @@ def test_a_successful_run_records_its_counts_and_advances_the_watermarks(session
             "links_created": 0,
             "candidates_created": 0,
         },
+        "affiliations": {"linked": 2, "conflicts": 0, "added": 0, "removed": 0},
     }
     assert target.workspace_watermarks == {"ws-1": {"organization": T1.isoformat()}}
     assert detected == [(session, run)]
-    # Start, archive, store, org and people matching, classification, then the sector mix.
-    assert session.commit.call_count == 7
+    # Start, archive, store, org and people matching, affiliations and their counts,
+    # classification, then the sector mix.
+    assert session.commit.call_count == 9
 
 
 def test_an_incremental_run_never_marks_records_removed(session, stored):
@@ -673,7 +682,7 @@ def test_a_successful_run_measures_the_sector_mix_after_classifying(
 
     # Assert
     assert [call[0] for call in steps.mock_calls] == ["classify", "measure"]
-    measured.assert_called_once_with(session, run)
+    measured.assert_called_once_with(session, run, sync_runs.linked_people)
 
 
 def test_a_failed_run_measures_nothing(session, stored, measured):
@@ -741,7 +750,7 @@ def test_recheck_runs_after_close_and_before_detect(session, stored, rechecked):
     }
     rechecked.assert_called_once()
     assert rechecked.call_args.args[2] == []
-    assert session.commit.call_count == 7
+    assert session.commit.call_count == 9
 
 
 def test_recheck_receives_carried_pairs(session, stored, rechecked):
@@ -774,3 +783,46 @@ def test_a_recheck_error_fails_the_run_and_rolls_store_back(session, stored, rec
     assert run.counts == {**dict.fromkeys(sync_runs.COUNT_KEYS, 0), "fetched": 1}
     assert "link_recheck" not in run.counts
     session.rollback.assert_called_once()
+
+
+def test_people_are_linked_to_organizations_between_matching_and_classifying(
+    session, stored, matched, affiliated, classified, mocker
+):
+    # Arrange
+    steps = mocker.Mock()
+    steps.attach_mock(matched, "match")
+    steps.attach_mock(affiliated, "affiliate")
+    steps.attach_mock(classified, "classify")
+
+    # Act
+    run = run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    # Assert
+    assert [call[0] for call in steps.mock_calls] == ["match", "affiliate", "classify"]
+    affiliated.assert_called_once_with(session, run.tenant_id)
+    assert run.counts["affiliations"] == {"linked": 2, "conflicts": 0, "added": 0, "removed": 0}
+
+
+def test_a_failed_affiliation_step_leaves_the_run_succeeded(session, stored, affiliated, measured):
+    # Arrange
+    affiliated.side_effect = RuntimeError("database went away")
+
+    # Act
+    run = run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    # Assert
+    assert run.status == "succeeded"
+    assert "affiliations" not in run.counts
+    measured.assert_called_once()
+
+
+def test_a_failed_run_links_no_people(session, stored, affiliated):
+    # Arrange
+    _, upsert, _ = stored
+    upsert.side_effect = RuntimeError("database went away")
+
+    # Act
+    run_sync(session, source(), org_reader(), archive=None, now=clock())
+
+    # Assert
+    affiliated.assert_not_called()

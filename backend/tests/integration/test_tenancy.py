@@ -15,6 +15,7 @@ from app.core.tenancy import (
     tenant_owned,
 )
 from app.models import (
+    Affiliation,
     IndustryClassification,
     MatchCandidate,
     Organization,
@@ -115,6 +116,14 @@ def add_graph(session, name: str) -> Graph:
             primary_sector="72",
             rules_version="test",
         ),
+        Affiliation: Affiliation(
+            tenant_id=tid,
+            person_record_id=person_record.id,
+            organization_record_id=first.id,
+            status="linked",
+            method="email_domain",
+            confidence=0.9,
+        ),
         SectorMixResult: SectorMixResult(
             tenant_id=tid,
             sync_run_id=run.id,
@@ -162,6 +171,7 @@ def test_the_graph_has_a_row_in_every_tenant_owned_table():
         MatchCandidate,
         IndustryClassification,
         SectorMixResult,
+        Affiliation,
     }
 
 

@@ -42,12 +42,17 @@ class LinkedRecord:
     versions: list[SourceRecord]
 
 
-def current_organization(tenant_id: uuid.UUID) -> ColumnElement[bool]:
+def current_version(tenant_id: uuid.UUID, kind: str) -> ColumnElement[bool]:
+    """The tenant's current source record versions of one kind."""
     return (
         (SourceRecord.tenant_id == tenant_id)
-        & (SourceRecord.kind == "organization")
+        & (SourceRecord.kind == kind)
         & SourceRecord.valid_to.is_(None)
     )
+
+
+def current_organization(tenant_id: uuid.UUID) -> ColumnElement[bool]:
+    return current_version(tenant_id, "organization")
 
 
 def link_join() -> ColumnElement[bool]:
