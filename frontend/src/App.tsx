@@ -1,3 +1,4 @@
+// AI contribution: 50% or more AI-generated
 import { useEffect, useState } from "react";
 import { ErrorMessage } from "./components/ErrorMessage";
 import { SyncRunsPage } from "./components/syncRuns/SyncRunsPage";

@@ -39,6 +39,8 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Cursor (agent mode) | mijanullah12 | Designing and writing the file import and its tests from issue #24, the Omerlo deletion handling from issue #119, drafting commit messages and docs |
 | Cursor (agent mode) | hendriktebeng | Implementing automatic org-link recheck (#110) and people matching (#112) |
 | Claude Code (Anthropic) | AndrewRazvan | Writing the tenant isolation, security checks, sync scheduling, error reporting and Fly.io deploy code and their tests from issues; looking up Fly.io settings and prices; drafting PR descriptions, issues and commit messages |
+| ChatGPT (OpenAI) | TristanGirardi | Explaining and troubleshooting the initial Docker, FastAPI, React and PostgreSQL setup (#19); generating cleaning tests and reviewing validation edge cases (#103) |
+| Codex (OpenAI) | TristanGirardi | Helping implement cleaning integration, batch duplicate handling, sync flag counts and test updates (#106); fixing Tier 1 matching formatting and declaration syntax (#61); updating this AI-use document |
 
 ## Features built with substantial AI help
 
@@ -52,6 +54,9 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Fixture mutation script | #52 | #124 |
 | Change detection between sync runs | #60 | #125 |
 | Recorded incremental sync runs | #55 | #126 |
+| Data cleaning and validation | #103 | [#104](https://github.com/Pulse-Omerlo/Pulse/pull/104) |
+| Cleaning mapped records before storage | #106 | [#133](https://github.com/Pulse-Omerlo/Pulse/pull/133) |
+| Tier 1 deterministic organization matching | #61 | [#159](https://github.com/Pulse-Omerlo/Pulse/pull/159) |
 | Sync runs page | #67 | #127 |
 | CSV and JSON file import | #24 | |
 | Industry classification of organizations | #149 | |
@@ -70,6 +75,67 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Fly.io deploy behind a shared password | #64, #65 | #178 |
 
 ## Details
+
+### Data cleaning and validation, TristanGirardi (#103, PR #104)
+
+ChatGPT generated many of the pytest tests for the reusable cleaning module and
+helped review validation logic and edge cases. The module handles missing values,
+whitespace, Unicode, type conversion, required fields, ranges, category mapping
+and duplicate detection. [PR #104](https://github.com/Pulse-Omerlo/Pulse/pull/104)
+declares the contribution as below 50% AI-generated.
+
+**Verification:** `backend/tests/test_cleaning.py` covers cleaning, validation,
+duplicate detection and edge cases. PR #104 records 87 passing tests and 98%
+module coverage at the time of that PR. These are the recorded results, not a
+new test run for this documentation update.
+
+### Cleaning mapped records before storage, TristanGirardi (#106, PR #133)
+
+Codex helped implement the cleaning integration, exact batch duplicate handling,
+cleaning flag counts on sync runs and the associated tests. The integration cleans
+mapped Omerlo records before versioned storage, preserving nested attributes and
+external identifiers and allowing changed records to reach change detection.
+[PR #133](https://github.com/Pulse-Omerlo/Pulse/pull/133) declares the contribution
+as below 50% AI-generated.
+
+**Verification:** `backend/tests/ingestion/omerlo/mapping/test_batch.py` checks
+exact repeats, preserved attributes and identifiers, invalid required fields and
+last-payload ordering. `backend/tests/services/test_sync_runs.py` and
+`backend/tests/integration/test_sync_runs.py` cover sync flag counts, unchanged
+resyncs and real changes opening new versions. PR #133 records 133 passing focused
+unit tests, 14 passing sync integration tests and passing CI at the time.
+
+### Tier 1 deterministic organization matching, TristanGirardi (#61, PR #159)
+
+Generative AI wrote `blocking_keys()`, `blocked_matches()`, the matching command
+in `backend/app/match.py` and the matching tests. It also assisted with
+`components()`, `match_organizations()` and refactoring and debugging
+`current_records()`. Adjusted the generated tests. Codex also fixed
+formatting and declaration syntax, as recorded in commit `e1f40ce`.
+[PR #159](https://github.com/Pulse-Omerlo/Pulse/pull/159) declares the contribution
+as 50% or more AI-generated. The generic-domain configuration commits separately
+declare no substantial AI-generated code.
+
+**Verification:** `backend/tests/processing/test_entity_resolution.py` and
+`backend/tests/integration/test_entity_resolution.py` cover matching rules,
+blocking, conflicting evidence, tenant isolation, reruns, manual decisions,
+versioning and rollback. PR #159 records 35 passing matching-feature unit tests,
+233 passing related unit tests, 14 passing PostgreSQL integration cases and
+passing CI at the time.
+
+**Review correction:** commit `f1ff754` replaced direct printing of matching
+results with the shared logger and structured tenant and result counts.
+
+### Initial project and Docker setup, TristanGirardi (#19, PR #48)
+
+ChatGPT provided step-by-step setup instructions and troubleshooting for Docker
+Compose, the frontend and backend Dockerfiles, PostgreSQL, environment variables
+and communication between React and FastAPI. This is setup and configuration
+work, recorded separately from the substantive features above. The assistance is
+documented in [PR #48](https://github.com/Pulse-Omerlo/Pulse/pull/48).
+
+**Verification:** PR #48 references the backend health test and records passing
+CI. `backend/tests/test_health.py` contains the API and database health checks.
 
 ### Omerlo backoffice API client and connector (#70, #71)
 
