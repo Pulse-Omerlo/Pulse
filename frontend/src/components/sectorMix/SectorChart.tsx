@@ -5,6 +5,8 @@ import { formatShare, scaleMax } from "./format";
 interface SectorChartProps {
   sectors: SectorShare[];
   peopleLinked: boolean;
+  // The region's name when the network is compared with one.
+  regionName?: string | null;
   selectedCode: string | null;
   onSelect: (code: string) => void;
 }
@@ -12,7 +14,7 @@ interface SectorChartProps {
 interface BarProps {
   value: number;
   max: number;
-  series: "organizations" | "people";
+  series: "organizations" | "people" | "region";
   target?: number | null;
 }
 
@@ -38,7 +40,13 @@ function Bar({ value, max, series, target = null }: BarProps) {
   );
 }
 
-export function SectorChart({ sectors, peopleLinked, selectedCode, onSelect }: SectorChartProps) {
+export function SectorChart({
+  sectors,
+  peopleLinked,
+  regionName = null,
+  selectedCode,
+  onSelect,
+}: SectorChartProps) {
   const max = scaleMax(sectors);
 
   return (
@@ -50,6 +58,11 @@ export function SectorChart({ sectors, peopleLinked, selectedCode, onSelect }: S
         {peopleLinked && (
           <span>
             <span className="swatch bar-people" /> People
+          </span>
+        )}
+        {regionName && (
+          <span>
+            <span className="swatch bar-region" /> {regionName} area businesses
           </span>
         )}
         {sectors.some((s) => s.target !== null) && (
@@ -65,7 +78,11 @@ export function SectorChart({ sectors, peopleLinked, selectedCode, onSelect }: S
               ? `, ${formatShare(sector.people_share)} of people`
               : "";
           const target = sector.target !== null ? `, target ${formatShare(sector.target)}` : "";
-          const label = `${sector.name}: ${formatShare(sector.organization_share)} of organizations${people}${target}`;
+          const region =
+            regionName && sector.region_share !== null
+              ? `, ${formatShare(sector.region_share)} of ${regionName} area businesses`
+              : "";
+          const label = `${sector.name}: ${formatShare(sector.organization_share)} of organizations${people}${region}${target}`;
           return (
             <li key={sector.code}>
               <button
@@ -87,6 +104,9 @@ export function SectorChart({ sectors, peopleLinked, selectedCode, onSelect }: S
                   {peopleLinked && sector.people_share !== null && (
                     <Bar value={sector.people_share} max={max} series="people" />
                   )}
+                  {regionName && sector.region_share !== null && (
+                    <Bar value={sector.region_share} max={max} series="region" />
+                  )}
                 </span>
               </button>
             </li>
@@ -105,6 +125,7 @@ export function SectorChart({ sectors, peopleLinked, selectedCode, onSelect }: S
               <th scope="col">Sector</th>
               <th scope="col">Organizations</th>
               {peopleLinked && <th scope="col">People</th>}
+              {regionName && <th scope="col">{regionName} area</th>}
               <th scope="col">Target</th>
             </tr>
           </thead>
@@ -120,6 +141,7 @@ export function SectorChart({ sectors, peopleLinked, selectedCode, onSelect }: S
                     {sector.people_count ?? 0} ({formatShare(sector.people_share ?? 0)})
                   </td>
                 )}
+                {regionName && <td>{formatShare(sector.region_share ?? 0)}</td>}
                 <td>{sector.target !== null ? formatShare(sector.target) : "None"}</td>
               </tr>
             ))}

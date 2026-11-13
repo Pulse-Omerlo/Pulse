@@ -1,0 +1,11 @@
+{
+  "table": "33-10-1176",
+  "title": "Canadian Business Counts, with employees, census metropolitan areas and census subdivisions, June 2026",
+  "release": "2026-08-14",
+  "reference_period": "2026-06-30",
+  "attribution": "Adapted from Statistics Canada, Table 33-10-1176. This does not constitute an endorsement by Statistics Canada of this product.",
+  "regions": {
+    "421": {"name": "Québec", "counts": {"54": 300, "72": 200, "31-33": 500}, "unclassified": 90},
+    "433": {"name": "Sherbrooke", "counts": {"54": 10, "72": 0, "31-33": 0}, "unclassified": 0}
+  }
+}

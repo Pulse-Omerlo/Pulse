@@ -33,6 +33,8 @@ class SectorShareOut(BaseModel):
     people_count: int | None
     people_share: float | None
     target: float | None
+    # Percent of the region's classified employer businesses; None when not compared.
+    region_share: float | None = None
     organizations: list[MixOrganizationOut]
     people: list[MixPersonOut] | None
 
@@ -45,9 +47,26 @@ class GapOut(BaseModel):
     explanation: str
 
 
+class BaselineOut(BaseModel):
+    table: str
+    title: str
+    release: str
+    reference_period: str
+    attribution: str
+    licence: str
+    region: str
+    region_name: str
+    classified_businesses: int
+    # Left out of every regional share.
+    unclassified_businesses: int
+
+
 class MixSettingsOut(BaseModel):
     gap_points: float
     targets: dict[str, float]
+    region: str | None = None
+    region_margin: float | None = None
+    baseline: BaselineOut | None = None
     version: str
 
 

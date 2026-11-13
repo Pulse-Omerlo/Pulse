@@ -63,6 +63,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Tenant API for organizations, runs and duplicates | #63 | |
 | Sector mix and gaps | #150 | |
 | Sector mix dashboard | #151 | |
+| Sector mix compared with Statistics Canada business counts | #156 | |
 | Recheck automatic organization links on matching-field change | #110 | |
 | Merging organizations joined by a chain of matches | #108 | |
 | Tier 2 fuzzy matching of organizations | #111 | |
@@ -305,6 +306,25 @@ the stored organizations and classifications.
 **Problem found:** the latest result was first chosen by the time it was
 computed, which is the same for every row written in one transaction. It is
 now chosen by the start of its sync run.
+
+### Sector mix compared with Statistics Canada business counts (#156)
+
+Claude Code wrote the command that finds the newest Canadian Business Counts
+table by its title and extracts Quebec's metropolitan areas, the extract
+itself, the regional shares and the `below_region` gap, the network region
+setting, the dashboard bar and source note, and the tests. Only public
+Statistics Canada data went through the tool; no client data was involved.
+
+**Verification:** unit tests run on a small fixed extract (shares without the
+unclassified, region lookup, the gap and its margin, settings, finding the
+table by title, building the extract from data points) and check that the
+committed extract has every sector of every region. An integration test stores
+a mix compared with a region. Component tests cover the third bar and the
+source note.
+
+**Note:** the ticket names the December 2025 table (33-10-1097), but
+looking the table up by title found the June 2026 release (33-10-1176), which
+is the one the extract uses.
 
 ### Sector mix dashboard (#151)
 

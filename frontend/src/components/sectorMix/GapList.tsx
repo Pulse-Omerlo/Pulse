@@ -5,6 +5,7 @@ const KIND_LABELS: Record<GapKind, string> = {
   too_few_organizations: "Few organizations",
   too_few_people: "Few people",
   below_target: "Below target",
+  below_region: "Below the region",
 };
 
 interface GapListProps {

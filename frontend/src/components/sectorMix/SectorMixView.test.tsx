@@ -51,6 +51,7 @@ function mix(overrides: Partial<SectorMix> = {}): SectorMix {
         people_count: 4,
         people_share: 100,
         target: null,
+        region_share: null,
         organizations: [
           {
             key: "org1",
@@ -75,6 +76,7 @@ function mix(overrides: Partial<SectorMix> = {}): SectorMix {
         people_count: 0,
         people_share: 0,
         target: null,
+        region_share: null,
         organizations: [
           {
             key: "v2",
@@ -101,6 +103,7 @@ function mix(overrides: Partial<SectorMix> = {}): SectorMix {
         people_count: 0,
         people_share: 0,
         target: 25,
+        region_share: null,
         organizations: [],
         people: [],
       },
@@ -283,5 +286,63 @@ describe("SectorMixView", () => {
     // Act / Assert
     expect(scaleMax(mix().sectors)).toBe(100);
     expect(scaleMax([{ ...mix().sectors[0], organization_share: 23, people_share: 4 }])).toBe(30);
+  });
+
+  it("shows the region's share next to the network's, with its source", async () => {
+    // Arrange
+    const compared = mix();
+    vi.mocked(getSectorMix).mockResolvedValue({
+      ...compared,
+      settings: {
+        ...compared.settings,
+        region: "421",
+        region_margin: 5,
+        baseline: {
+          table: "33-10-1176",
+          title: "Canadian Business Counts, June 2026",
+          release: "2026-08-14",
+          reference_period: "2026-06-30",
+          attribution: "Adapted from Statistics Canada, Table 33-10-1176.",
+          licence: "Statistics Canada Open Licence",
+          region: "421",
+          region_name: "Québec",
+          classified_businesses: 24824,
+          unclassified_businesses: 1620,
+        },
+      },
+      sectors: compared.sectors.map((s) => ({ ...s, region_share: s.code === "72" ? 6.7 : 12 })),
+      gaps: [
+        ...compared.gaps,
+        {
+          code: "22",
+          kind: "below_region",
+          size: 12,
+          explanation: "Utilities makes up 0.0% of the network's organizations but 12.0%.",
+        },
+      ],
+    });
+
+    // Act
+    renderView();
+
+    // Assert
+    const chart = await screen.findByRole("figure");
+    expect(within(chart).getAllByRole("button")[0]).toHaveAttribute(
+      "aria-label",
+      "Accommodation and food: 66.7% of organizations, 0.0% of people, 6.7% of Québec area businesses",
+    );
+    expect(within(chart).getByText(/Québec area businesses/)).toBeVisible();
+    expect(screen.getByText("Below the region")).toBeVisible();
+    expect(screen.getByText(/the 1,620 it could not classify are left out/)).toBeVisible();
+    expect(screen.getByText(/Adapted from Statistics Canada, Table 33-10-1176/)).toBeVisible();
+  });
+
+  it("shows no regional share for a network compared with no region", async () => {
+    // Act
+    renderView();
+
+    // Assert
+    await screen.findByRole("figure");
+    expect(screen.queryByText(/Statistics Canada/)).toBeNull();
   });
 });

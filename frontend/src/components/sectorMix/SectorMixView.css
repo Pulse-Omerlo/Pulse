@@ -1,7 +1,8 @@
 .sector-mix {
-  /* Categorical slots 1 and 2, validated on the light and dark page surfaces. */
+  /* Categorical slots 1 to 3, validated on the light and dark page surfaces. */
   --series-organizations: #2a78d6;
   --series-people: #eb6834;
+  --series-region: #1baf7a;
   --target: var(--text-h);
 }
 
@@ -9,6 +10,7 @@
   .sector-mix {
     --series-organizations: #3987e5;
     --series-people: #d95926;
+    --series-region: #199e70;
   }
 }
 
@@ -111,6 +113,14 @@
 
 .bar-people {
   background: var(--series-people);
+}
+
+.bar-region {
+  background: var(--series-region);
+}
+
+.baseline-source {
+  font-size: 0.85rem;
 }
 
 .bar-value {

@@ -251,6 +251,7 @@ describe("SyncRunsPage", () => {
           people_count: null,
           people_share: null,
           target: null,
+          region_share: null,
           organizations: [
             {
               key: "org1",
