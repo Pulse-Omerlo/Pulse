@@ -50,6 +50,13 @@ class NotFoundError(PulseError):
     code = "not_found"
 
 
+class ConflictError(PulseError):
+    """The request no longer fits the data, e.g. a pair someone else already decided."""
+
+    status_code = 409
+    code = "conflict"
+
+
 class NotAuthenticatedError(PulseError):
     status_code = 401
     code = "not_authenticated"

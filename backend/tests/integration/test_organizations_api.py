@@ -8,6 +8,7 @@ from contextlib import contextmanager
 
 import pytest
 from sqlalchemy import event, func, select
+from sqlalchemy.orm import aliased
 
 from app.core.tenancy import bound_to_tenant
 from app.models import MatchCandidate, Organization, OrgLink, RecordChange, SourceRecord
@@ -176,8 +177,19 @@ def test_the_timeline_lists_the_changes_of_every_record_newest_first(api, sessio
 
 def test_duplicate_candidates_carry_both_records_and_the_matched_fields(api, session, matched):
     # Arrange
+    left, right = aliased(SourceRecord), aliased(SourceRecord)
+    # The queue holds pairs of current organization versions only.
     pending = session.scalar(
-        select(func.count(MatchCandidate.id)).where(MatchCandidate.status == "pending")
+        select(func.count(MatchCandidate.id))
+        .join(left, left.id == MatchCandidate.left_record_id)
+        .join(right, right.id == MatchCandidate.right_record_id)
+        .where(
+            MatchCandidate.status == "pending",
+            left.kind == "organization",
+            right.kind == "organization",
+            left.valid_to.is_(None),
+            right.valid_to.is_(None),
+        )
     )
 
     # Act
@@ -188,6 +200,7 @@ def test_duplicate_candidates_carry_both_records_and_the_matched_fields(api, ses
     for candidate in page["items"]:
         assert candidate["left"]["version_id"] != candidate["right"]["version_id"]
         assert candidate["matched_fields"]
+        assert candidate["left_values"][0]["field"] == "name"
     scores = [c["score"] for c in page["items"]]
     assert scores == sorted(scores, reverse=True)
 

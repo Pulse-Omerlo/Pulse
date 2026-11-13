@@ -19,10 +19,15 @@ from tests.integration.signin import PASSWORD, add_user, client_for, sign_in
 pytestmark = pytest.mark.integration
 
 
-def tenant_routes() -> list[str]:
-    """Every GET route under /api/tenants/{tenant_id}, from the app itself."""
+def tenant_routes() -> list[tuple[str, str]]:
+    """Every (method, path) under /api/tenants/{tenant_id}, from the app itself."""
     paths = app.openapi()["paths"]
-    return sorted(p for p, ops in paths.items() if "{tenant_id}" in p and "get" in ops)
+    return sorted(
+        (method, path)
+        for path, operations in paths.items()
+        if "{tenant_id}" in path
+        for method in operations
+    )
 
 
 def filled(path: str, tenant_id: uuid.UUID) -> str:
@@ -49,36 +54,38 @@ def login(client, email, password=PASSWORD):
     return client.post("/api/auth/login", json={"email": email, "password": password})
 
 
-@pytest.mark.parametrize("path", tenant_routes())
-def test_a_tenant_route_without_a_session_answers_401(client, tenants, path):
+@pytest.mark.parametrize(("method", "path"), tenant_routes())
+def test_a_tenant_route_without_a_session_answers_401(client, tenants, method, path):
     # Arrange
     own, _ = tenants
 
     # Act
-    response = client.get(filled(path, own.id))
+    response = client.request(method, filled(path, own.id))
 
     # Assert
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "not_authenticated"
 
 
-@pytest.mark.parametrize("path", tenant_routes())
-def test_another_tenants_route_answers_404_like_an_unknown_tenant(client, session, tenants, path):
+@pytest.mark.parametrize(("method", "path"), tenant_routes())
+def test_another_tenants_route_answers_404_like_an_unknown_tenant(
+    client, session, tenants, method, path
+):
     # Arrange
     own, other = tenants
     sign_in(client, session, own.id)
 
     # Act
-    response = client.get(filled(path, other.id))
-    unknown = client.get(filled(path, uuid.uuid4()))
+    response = client.request(method, filled(path, other.id))
+    unknown = client.request(method, filled(path, uuid.uuid4()))
 
     # Assert
     assert response.status_code == unknown.status_code == 404
     assert response.json()["error"]["message"] == unknown.json()["error"]["message"]
 
 
-@pytest.mark.parametrize("path", tenant_routes())
-def test_an_expired_session_answers_401(client, session, tenants, path):
+@pytest.mark.parametrize(("method", "path"), tenant_routes())
+def test_an_expired_session_answers_401(client, session, tenants, method, path):
     # Arrange
     own, _ = tenants
     email = add_user(session, own.id)
@@ -89,7 +96,7 @@ def test_an_expired_session_answers_401(client, session, tenants, path):
     client.cookies.set(SESSION_COOKIE, token)
 
     # Act
-    response = client.get(filled(path, own.id))
+    response = client.request(method, filled(path, own.id))
 
     # Assert
     assert response.status_code == 401

@@ -74,6 +74,7 @@ migrations, empty `__init__.py` files and `vite-env.d.ts` are excluded.
 | Sync of every source with a per-source lock | #66 | #176 |
 | Error reporting to Sentry | #174 | #177 |
 | Fly.io deploy behind a shared password | #64, #65 | #178 |
+| Manual review queue for possible matches | #113 | #184 |
 
 ## Details
 
@@ -549,3 +550,24 @@ settings; component tests cover the sign-in form and the app shell.
 **Problem found:** the existing API tests reached tenant routes with no
 session, so they now sign in through the real route as a user of the tenant
 they read.
+
+### Manual review queue for possible matches (#113)
+
+Claude Code wrote the accept, reject and undo service, the decision columns and
+their migration, the copy of decisions to new versions, the review endpoints,
+the side-by-side values, the review screen and the tests. Merging the
+organization with fewer current records into the other, and storing what an
+accept changed so undo can reverse it, were its choices; the PR lists them for
+review.
+
+**Verification:** integration tests on Postgres accept two loose records, a
+loose record and a linked one, and records of two organizations; undo a merge
+and an accept that created an organization; check that a rejected pair stays
+apart when matching runs again; refuse a second decision; and keep the queue to
+current organization pairs. API tests record the signed-in reviewer, and the
+isolation tests stop one tenant from deciding another's pairs. Component tests
+cover the review screen.
+
+**Problem found:** the existing candidate list also returned pairs of older
+versions and people pairs, which share the table since #112. The queue now
+shows only current organization pairs.

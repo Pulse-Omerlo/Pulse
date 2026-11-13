@@ -15,6 +15,7 @@ import {
 import { ErrorMessage } from "../ErrorMessage";
 import { GoalsView } from "../goals/GoalsView";
 import { OrganizationsView } from "../organizations/OrganizationsView";
+import { ReviewView } from "../review/ReviewView";
 import { ChangeList } from "./ChangeList";
 import { RecordHistoryPanel } from "./RecordHistoryPanel";
 import { RunList } from "./RunList";
@@ -30,7 +31,7 @@ export function SyncRunsPage() {
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<RecordSummary[] | null>(null);
   const [error, setError] = useState<unknown>(null);
-  const [view, setView] = useState<"goals" | "runs" | "organizations">("runs");
+  const [view, setView] = useState<"goals" | "runs" | "organizations" | "review">("runs");
 
   const selectRun = (selected: SyncRun | null, tenant: string | null = tenantId) => {
     setRun(selected);
@@ -118,6 +119,17 @@ export function SyncRunsPage() {
           >
             Sync runs
           </button>
+          <button
+            type="button"
+            aria-pressed={view === "review"}
+            className={view === "review" ? "filter active" : "filter"}
+            onClick={() => {
+              setView("review");
+              setHistory(null);
+            }}
+          >
+            Review matches
+          </button>
           <span className="flow" aria-label="Events contain organizations, which contain people">
             <button type="button" className="filter" disabled title="Coming soon">
               Events
@@ -176,6 +188,12 @@ export function SyncRunsPage() {
 
       {view === "goals" ? (
         <GoalsView />
+      ) : view === "review" && tenantId ? (
+        history ? (
+          <RecordHistoryPanel history={history} runs={runs} onClose={() => setHistory(null)} />
+        ) : (
+          <ReviewView key={tenantId} tenantId={tenantId} onOpenRecord={openRecord} />
+        )
       ) : view === "organizations" && tenantId ? (
         history ? (
           <RecordHistoryPanel history={history} runs={runs} onClose={() => setHistory(null)} />

@@ -289,3 +289,48 @@ export function getOrganizationTimeline(
     `/api/tenants/${tenantId}/organizations/${organizationId}/timeline`,
   );
 }
+
+export type CandidateStatus = "pending" | "accepted" | "rejected";
+
+export interface FieldValue {
+  field: string;
+  // As stored in the source, and as PULSE normalized it for matching.
+  value: string | null;
+  normalized: string | null;
+}
+
+export interface MatchCandidate {
+  id: string;
+  score: number;
+  status: CandidateStatus;
+  left: RecordRef;
+  right: RecordRef;
+  matched_fields: Record<string, unknown>[];
+  left_values: FieldValue[];
+  right_values: FieldValue[];
+  decided_by: string | null;
+  decided_at: string | null;
+}
+
+// Possible matches with a status: pending ones by score, decided ones newest first.
+export function getCandidates(
+  tenantId: string,
+  status: CandidateStatus,
+  page: number,
+): Promise<Page<MatchCandidate>> {
+  const params = new URLSearchParams({ status, page: String(page), page_size: "10" });
+  return request<Page<MatchCandidate>>(`/api/tenants/${tenantId}/duplicates/candidates?${params}`);
+}
+
+export type CandidateAction = "accept" | "reject" | "undo";
+
+export function decideCandidate(
+  tenantId: string,
+  candidateId: string,
+  action: CandidateAction,
+): Promise<MatchCandidate> {
+  return request<MatchCandidate>(
+    `/api/tenants/${tenantId}/duplicates/candidates/${candidateId}/${action}`,
+    { method: "POST" },
+  );
+}

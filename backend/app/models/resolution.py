@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import NotRequired, TypedDict
 
 from sqlalchemy import CheckConstraint, DateTime, Double, Index, Text, UniqueConstraint, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base, json_column, one_of, same_tenant_fk, tenant_id_column, uuid_pk
@@ -115,3 +116,9 @@ class MatchCandidate(Base):
     score: Mapped[float] = mapped_column(Double)
     matched_fields: Mapped[list[RuleEvidence]] = json_column("[]")
     status: Mapped[str] = mapped_column(Text, server_default="pending")
+    # Who accepted or rejected the pair in review, and when; empty while pending and for
+    # pairs decided before review existed.
+    decided_by: Mapped[str | None] = mapped_column(Text)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # What accepting changed, so the decision can be undone (see services/review.py).
+    decision: Mapped[dict | None] = mapped_column(JSONB)

@@ -58,7 +58,8 @@ COPY_MATCH_CANDIDATES = text(
         WHERE c.tenant_id = :tenant_id
     ),
     moved AS (
-        SELECT t.tenant_id, t.score, t.matched_fields, t.status,
+        SELECT t.tenant_id, t.score, t.matched_fields, t.status, t.decided_by, t.decided_at,
+               t.decision,
                COALESCE(ml.new_id, t.left_record_id) AS a,
                COALESCE(mr.new_id, t.right_record_id) AS b
         FROM touched t
@@ -66,9 +67,9 @@ COPY_MATCH_CANDIDATES = text(
         LEFT JOIN m mr ON mr.old_id = t.right_record_id
     )
     INSERT INTO match_candidate (tenant_id, left_record_id, right_record_id, score,
-                                 matched_fields, status)
+                                 matched_fields, status, decided_by, decided_at, decision)
     SELECT mv.tenant_id, LEAST(mv.a, mv.b), GREATEST(mv.a, mv.b), mv.score,
-           mv.matched_fields, mv.status
+           mv.matched_fields, mv.status, mv.decided_by, mv.decided_at, mv.decision
     FROM moved mv
     JOIN source_record sa ON sa.tenant_id = mv.tenant_id AND sa.id = mv.a
     JOIN source_record sb ON sb.tenant_id = mv.tenant_id AND sb.id = mv.b
