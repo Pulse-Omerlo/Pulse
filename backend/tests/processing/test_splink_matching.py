@@ -7,6 +7,7 @@ from uuid import UUID
 import pytest
 
 from app import splink_report
+from app.processing import splink_matching
 from app.processing.fuzzy_config import load_fuzzy_config
 from app.processing.splink_matching import MATCH_FIELDS, prior, splink_pairs, splink_rows
 from app.processing.tier1_accuracy import score
@@ -82,10 +83,9 @@ def test_a_higher_threshold_only_drops_pairs(capitale):
     assert len(strict) < len(loose)
 
 
-def test_records_from_two_tenants_never_match(capitale):
-    # Arrange: every record also exists, unchanged, in a second tenant.
-    records, _ = capitale
-    copies = [
+def copies_in_another_tenant(records):
+    """The same records, unchanged, in a second tenant."""
+    return [
         organization_record(
             UUID(int=number),
             UUID(int=99),
@@ -94,12 +94,31 @@ def test_records_from_two_tenants_never_match(capitale):
         )
         for number, record in enumerate(records, start=1)
     ]
+
+
+def test_records_from_two_tenants_never_match(capitale):
+    # Arrange: every record also exists, unchanged, in a second tenant.
+    records, _ = capitale
+    copies = copies_in_another_tenant(records)
     tenant_of = {record.external_id: record.tenant_id for record in records + copies}
     # Act
     pairs = splink_pairs(records + copies)
     # Assert
     assert pairs
     assert all(tenant_of[left] == tenant_of[right] for left, right in pairs)
+
+
+def test_each_tenant_trains_its_own_model(capitale, mocker):
+    # Arrange
+    records, _ = capitale
+    model_input = mocker.spy(splink_matching, "splink_rows")
+    # Act
+    splink_pairs(records + copies_in_another_tenant(records))
+    # Assert: one model per tenant, each built only from that tenant's records.
+    tenants_per_model = [
+        {record.tenant_id for record in call.args[0]} for call in model_input.call_args_list
+    ]
+    assert tenants_per_model == [{records[0].tenant_id}, {UUID(int=99)}]
 
 
 def test_report_scores_each_method_per_tenant_and_in_total(capsys):

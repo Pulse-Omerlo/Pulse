@@ -2,6 +2,7 @@
 """Match organizations with a Splink probabilistic model (dev only, compared with Tier 1 and 2)."""
 
 import logging
+from collections import defaultdict
 
 import splink.comparison_library as cl
 from splink import DuckDBAPI, Linker, SettingsCreator, block_on
@@ -73,6 +74,19 @@ def train(linker):
 
 def splink_pairs(records, threshold=DEFAULT_THRESHOLD):
     """Pairs of external ids that Splink matches with at least `threshold` probability."""
+    # Random sampling in train() ignores the blocking rules, so a model trained on
+    # several tenants would learn from pairs across tenants. Each tenant gets its own.
+    by_tenant = defaultdict(list)
+    for record in records:
+        by_tenant[record.tenant_id].append(record)
+    pairs = set()
+    for tenant_records in by_tenant.values():
+        pairs |= tenant_pairs(tenant_records, threshold)
+    return pairs
+
+
+def tenant_pairs(records, threshold):
+    """Train a model on one tenant's records and return the pairs it matches."""
     rows = splink_rows(records)
     if len(rows) < 2:
         return set()
