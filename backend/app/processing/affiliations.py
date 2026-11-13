@@ -149,12 +149,15 @@ def findable_name(words: tuple[str, ...]) -> bool:
     return len(words) > 1 or (len(words) == 1 and len(words[0]) >= MIN_SINGLE_WORD_NAME)
 
 
+def registered_domain(email: str) -> str | None:
+    """The registered domain of an email address (mail.acme.ca gives acme.ca)."""
+    return normalize_domain(email_domain(email))
+
+
 def work_domain(email: str, excluded: frozenset[str]) -> str | None:
     """The registered domain of a work email; None for a personal or generic one."""
-    domain = normalize_domain(email_domain(email))
-    if domain is None or domain in excluded:
-        return None
-    return domain
+    domain = registered_domain(email)
+    return None if domain in excluded else domain
 
 
 def affiliate(

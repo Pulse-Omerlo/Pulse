@@ -16,10 +16,11 @@ from app.processing.affiliations import (
     OrganizationFacts,
     PersonFacts,
     affiliate,
-    work_domain,
+    registered_domain,
 )
 from app.processing.entity_resolution import load_generic_domains
 from app.processing.sector_mix import PersonUnit
+from app.services.organization_views import current_organization, current_version, link_join
 from app.services.pagination import Paging
 
 
@@ -39,10 +40,6 @@ class AffiliationReport:
         }
 
 
-def current(kind: str):
-    return (SourceRecord.kind == kind) & SourceRecord.valid_to.is_(None)
-
-
 def strings(value: Any) -> list[str]:
     if isinstance(value, str):
         return [value] if value.strip() else []
@@ -53,10 +50,11 @@ def strings(value: Any) -> list[str]:
     return []
 
 
-def organization_facts(
-    session: Session, tenant_id: uuid.UUID, excluded: frozenset[str]
-) -> list[OrganizationFacts]:
-    """Current organization versions with their domains, from their website and emails."""
+def organization_facts(session: Session, tenant_id: uuid.UUID) -> list[OrganizationFacts]:
+    """Current organization versions with their domains, from their website and emails.
+
+    Generic domains are kept here; the index of organizations leaves them out.
+    """
     rows = session.execute(
         select(
             SourceRecord.id,
@@ -67,18 +65,14 @@ def organization_facts(
             SourceRecord.attributes["identifiers"],
             OrgLink.organization_id,
         )
-        .outerjoin(
-            OrgLink,
-            (OrgLink.tenant_id == SourceRecord.tenant_id)
-            & (OrgLink.source_record_id == SourceRecord.id),
-        )
-        .where(SourceRecord.tenant_id == tenant_id, current("organization"))
+        .outerjoin(OrgLink, link_join())
+        .where(current_organization(tenant_id))
     ).all()
     facts = []
     for record_id, source_id, external_id, name, domain, identifiers, organization_id in rows:
         identifiers = identifiers if isinstance(identifiers, dict) else {}
         domains = {domain, *strings(identifiers.get("domains"))}
-        domains |= {work_domain(email, excluded) for email in strings(identifiers.get("emails"))}
+        domains |= {registered_domain(email) for email in strings(identifiers.get("emails"))}
         facts.append(
             OrganizationFacts(
                 record_id=record_id,
@@ -104,7 +98,7 @@ def person_facts(session: Session, tenant_id: uuid.UUID) -> list[PersonFacts]:
             attributes["job_titles"],
             attributes["job_title"],
             attributes["organization_id"],
-        ).where(SourceRecord.tenant_id == tenant_id, current("person"))
+        ).where(current_version(tenant_id, "person"))
     ).all()
     return [
         PersonFacts(
@@ -126,12 +120,10 @@ def link_people(session: Session, tenant_id: uuid.UUID) -> AffiliationReport:
     """
     excluded = load_generic_domains()
     decisions = affiliate(
-        person_facts(session, tenant_id), organization_facts(session, tenant_id, excluded), excluded
+        person_facts(session, tenant_id), organization_facts(session, tenant_id), excluded
     )
     wanted = {(d.person_record_id, d.organization_record_id): d for d in decisions}
-    current_people = select(SourceRecord.id).where(
-        SourceRecord.tenant_id == tenant_id, current("person")
-    )
+    current_people = select(SourceRecord.id).where(current_version(tenant_id, "person"))
     existing = session.scalars(
         select(Affiliation).where(
             Affiliation.tenant_id == tenant_id,
@@ -228,7 +220,7 @@ def linked_people(session: Session, tenant_id: uuid.UUID) -> list[PersonUnit]:
             (OrgLink.tenant_id == organization_record.tenant_id)
             & (OrgLink.source_record_id == organization_record.id),
         )
-        .where(SourceRecord.tenant_id == tenant_id, current("person"))
+        .where(current_version(tenant_id, "person"))
     ).all()
     return people_units(rows)
 
