@@ -113,29 +113,36 @@ class OrganizationIndex:
     """The tenant's current organizations, looked up by each signal."""
 
     def __init__(self, organizations: Iterable[OrganizationFacts], excluded: frozenset[str]):
+        self.excluded = excluded
         self.by_ref: dict[tuple[uuid.UUID, str], list[OrganizationFacts]] = defaultdict(list)
         self.by_domain: dict[str, list[OrganizationFacts]] = defaultdict(list)
-        # Names that can be found in a job title, by their first word.
-        self.by_first_word: dict[str, list[tuple[tuple[str, ...], OrganizationFacts]]] = (
-            defaultdict(list)
-        )
-        self.excluded = excluded
+        # Names that can be found in a job title, as tuples of words.
+        self.by_name: dict[tuple[str, ...], list[OrganizationFacts]] = defaultdict(list)
         for organization in organizations:
-            self.by_ref[(organization.source_id, organization.external_id)].append(organization)
-            for domain in organization.domains - excluded:
-                self.by_domain[domain].append(organization)
-            words = tuple((organization.name_normalized or "").split())
-            if findable_name(words):
-                self.by_first_word[words[0]].append((words, organization))
+            self._add(organization)
+        # The word counts of those names: a title is only cut into spans of these lengths.
+        self.name_lengths = sorted({len(name) for name in self.by_name})
+
+    def _add(self, organization: OrganizationFacts) -> None:
+        self.by_ref[(organization.source_id, organization.external_id)].append(organization)
+        for domain in organization.domains - self.excluded:
+            self.by_domain[domain].append(organization)
+        words = tuple((organization.name_normalized or "").split())
+        if findable_name(words):
+            self.by_name[words].append(organization)
 
     def named_in(self, title: str) -> list[OrganizationFacts]:
+        """Organizations whose whole name appears in the title, as consecutive words.
+
+        One dictionary lookup per span of the title, instead of comparing every name.
+        """
         words = tuple((normalize_organization_name(title) or "").split())
-        found = []
-        for start, word in enumerate(words):
-            for name, organization in self.by_first_word.get(word, []):
-                if words[start : start + len(name)] == name:
-                    found.append(organization)
-        return found
+        spans = (
+            words[start : start + length]
+            for length in self.name_lengths
+            for start in range(len(words) - length + 1)
+        )
+        return [organization for span in spans for organization in self.by_name.get(span, [])]
 
 
 def findable_name(words: tuple[str, ...]) -> bool:
@@ -174,32 +181,50 @@ def decide(person: PersonFacts, index: OrganizationIndex) -> list[AffiliationDec
     return [as_decision(person, candidate, status) for candidate in inferred.values()]
 
 
-def relation_candidates(person: PersonFacts, index: OrganizationIndex) -> Candidates:
+# One signal: an organization it points at, and the evidence of it.
+type Signal = tuple[OrganizationFacts, AffiliationEvidence]
+
+
+def collect(signals: Iterable[Signal]) -> Candidates:
+    """Group signals by the organization they point at."""
     candidates: dict[uuid.UUID, _Candidate] = defaultdict(_Candidate)
-    for ref in person.organization_refs:
-        for organization in index.by_ref.get((person.source_id, ref), []):
-            candidates[organization.key].add(
-                organization.record_id,
-                evidence(RELATION, ref, "organization_id", ref),
-            )
+    for organization, item in signals:
+        candidates[organization.key].add(organization.record_id, item)
     return dict(candidates)
+
+
+def relation_signals(person: PersonFacts, index: OrganizationIndex) -> list[Signal]:
+    return [
+        (organization, evidence(RELATION, ref, "organization_id", ref))
+        for ref in person.organization_refs
+        for organization in index.by_ref.get((person.source_id, ref), [])
+    ]
+
+
+def email_signals(person: PersonFacts, index: OrganizationIndex) -> list[Signal]:
+    domains = ((email, work_domain(email, index.excluded)) for email in person.emails)
+    return [
+        (organization, evidence(EMAIL_DOMAIN, domain, "email", email))
+        for email, domain in domains
+        if domain
+        for organization in index.by_domain.get(domain, [])
+    ]
+
+
+def title_signals(person: PersonFacts, index: OrganizationIndex) -> list[Signal]:
+    return [
+        (organization, evidence(JOB_TITLE, organization.name_normalized or "", "job_title", title))
+        for title in person.job_titles
+        for organization in index.named_in(title)
+    ]
+
+
+def relation_candidates(person: PersonFacts, index: OrganizationIndex) -> Candidates:
+    return collect(relation_signals(person, index))
 
 
 def inferred_candidates(person: PersonFacts, index: OrganizationIndex) -> Candidates:
-    candidates: dict[uuid.UUID, _Candidate] = defaultdict(_Candidate)
-    for email in person.emails:
-        domain = work_domain(email, index.excluded)
-        for organization in index.by_domain.get(domain, []) if domain else []:
-            candidates[organization.key].add(
-                organization.record_id, evidence(EMAIL_DOMAIN, domain, "email", email)
-            )
-    for title in person.job_titles:
-        for organization in index.named_in(title):
-            candidates[organization.key].add(
-                organization.record_id,
-                evidence(JOB_TITLE, organization.name_normalized or "", "job_title", title),
-            )
-    return dict(candidates)
+    return collect([*email_signals(person, index), *title_signals(person, index)])
 
 
 def evidence(signal: str, value: str, field_name: str, source: str) -> AffiliationEvidence:
