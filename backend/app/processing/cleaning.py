@@ -137,143 +137,122 @@ def _make_flag(index, name, original, reason):
     }
 
 
+def _read_date_text(value, rule):
+    """Try ISO first, then the source's explicitly configured formats."""
+    text = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        return date.fromisoformat(text) if rule.type == "date" else datetime.fromisoformat(text)
+    except ValueError:
+        # A non-ISO value may still match a configured source format.
+        for pattern in rule.input_formats:
+            try:
+                return datetime.strptime(value, pattern)
+            except ValueError:
+                continue
+
+    if re.fullmatch(r"\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}.*", value):
+        raise ValueError("ambiguous or unsupported day/month date; set input_formats")
+    raise ValueError("invalid or unsupported date format")
+
+
+def _localize_datetime(value, source_timezone):
+    """Attach a source timezone, rejecting missing and repeated local times."""
+    if not source_timezone:
+        raise ValueError("datetime has no timezone; configure source_timezone")
+    try:
+        local_timezone = ZoneInfo(source_timezone)
+    except (ZoneInfoNotFoundError, ValueError) as error:
+        raise ValueError("unknown source timezone") from error
+
+    first = value.replace(tzinfo=local_timezone, fold=0)
+    second = value.replace(tzinfo=local_timezone, fold=1)
+    first_back = first.astimezone(UTC).astimezone(local_timezone)
+    second_back = second.astimezone(UTC).astimezone(local_timezone)
+    first_valid = first_back.replace(tzinfo=None) == value
+    second_valid = second_back.replace(tzinfo=None) == value
+    if not first_valid and not second_valid:
+        raise ValueError("local datetime does not exist because of daylight saving time")
+    if first.utcoffset() != second.utcoffset() and first_valid and second_valid:
+        raise ValueError("ambiguous local datetime because of daylight saving time")
+    return first if first_valid else second
+
+
 def _parse_date(value, rule):
     """Convert a date to YYYY-MM-DD or a datetime to ISO 8601 UTC."""
-
-    date_value = None
-
-    if isinstance(value, (datetime, date, date)):
+    if isinstance(value, datetime | date):
         date_value = value
     elif isinstance(value, str):
-        text = value
-        if text.endswith("Z"):
-            text = text[:-1] + "+00:00"
-
-        # ISO dates are unambiguous and can be read without a format setting.
-        try:
-            if rule.type == "date":
-                date_value = date.fromisoformat(text)
-            else:
-                date_value = datetime.fromisoformat(text)
-        except ValueError:
-            pass
-
-        # Other formats must be explicitly configured for the source.
-        if date_value is None:
-            for pattern in rule.input_formats:
-                try:
-                    date_value = datetime.strptime(value, pattern)
-                    break
-                except ValueError:
-                    continue
-
-        if date_value is None:
-            if re.fullmatch(r"\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}.*", value):
-                raise ValueError("ambiguous or unsupported day/month date; set input_formats")
-            raise ValueError("invalid or unsupported date format")
+        date_value = _read_date_text(value, rule)
     else:
         raise ValueError("invalid date or datetime")
 
     if rule.type == "date":
+        # A date has no timezone. Only keep the calendar day.
         if isinstance(date_value, datetime):
-            # A date has no timezone. Only keep the calendar day.
             date_value = date_value.date()
         return date_value.isoformat()
-
     if not isinstance(date_value, datetime):
         raise ValueError("datetime needs a time value")
-
     if date_value.tzinfo is None:
-        if not rule.source_timezone:
-            raise ValueError("datetime has no timezone; configure source_timezone")
-
-        try:
-            local_timezone = ZoneInfo(rule.source_timezone)
-        except (ZoneInfoNotFoundError, ValueError) as error:
-            raise ValueError("unknown source timezone") from error
-
-        # Check daylight saving time: some local times are missing or occur twice.
-        first = date_value.replace(tzinfo=local_timezone, fold=0)
-        second = date_value.replace(tzinfo=local_timezone, fold=1)
-        first_back = first.astimezone(UTC).astimezone(local_timezone)
-        second_back = second.astimezone(UTC).astimezone(local_timezone)
-        first_valid = first_back.replace(tzinfo=None) == date_value
-        second_valid = second_back.replace(tzinfo=None) == date_value
-
-        if not first_valid and not second_valid:
-            raise ValueError("local datetime does not exist because of daylight saving time")
-        if first.utcoffset() != second.utcoffset() and first_valid and second_valid:
-            raise ValueError("ambiguous local datetime because of daylight saving time")
-
-        date_value = first if first_valid else second
-
+        date_value = _localize_datetime(date_value, rule.source_timezone)
     return date_value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _convert(value, rule):
-    """Convert a field into the type listed in its FieldRule."""
+def _parse_number(value, rule):
+    if isinstance(value, bool):
+        raise ValueError("invalid number")
+    if isinstance(value, str) and rule.decimal_comma and "," in value and "." not in value:
+        value = value.replace(",", ".")
+    try:
+        value = float(value)
+    except (ValueError, TypeError, OverflowError) as error:
+        raise ValueError("invalid number") from error
+    if not math.isfinite(value):
+        raise ValueError("number must be finite")
+    return value
 
+
+def _parse_boolean(value):
+    if isinstance(value, bool):
+        return value
+    # Reject arbitrary integers such as 2, but accept 0 and 1.
+    if isinstance(value, int) and value not in (0, 1):
+        raise ValueError("invalid boolean")
+    text = str(value).casefold()
+    if text in TRUE_VALUES:
+        return True
+    if text in FALSE_VALUES:
+        return False
+    raise ValueError("invalid boolean")
+
+
+def _convert_type(value, rule):
+    """Convert the value before applying categories and validation limits."""
     if rule.type == "string":
         if not isinstance(value, str):
             raise ValueError("must be text")
-
-    elif rule.type == "integer":
+        return value
+    if rule.type == "integer":
         if isinstance(value, bool) or not re.fullmatch(r"[+-]?\d+", str(value)):
             raise ValueError("invalid integer")
-        value = int(value)
-
-    elif rule.type == "number":
-        if isinstance(value, bool):
-            raise ValueError("invalid number")
-
-        if isinstance(value, str) and rule.decimal_comma and "," in value and "." not in value:
-            value = value.replace(",", ".")
-
-        try:
-            value = float(value)
-        except (ValueError, TypeError, OverflowError) as error:
-            raise ValueError("invalid number") from error
-
-        if not math.isfinite(value):
-            raise ValueError("number must be finite")
-
-    elif rule.type == "boolean":
-        if not isinstance(value, bool):
-            # Reject arbitrary integers such as 2, but accept 0 and 1.
-            if isinstance(value, int) and value not in (0, 1):
-                raise ValueError("invalid boolean")
-            text = str(value).casefold()
-            if text in TRUE_VALUES:
-                value = True
-            elif text in FALSE_VALUES:
-                value = False
-            else:
-                raise ValueError("invalid boolean")
-
-    elif rule.type == "date" or rule.type == "datetime":
-        value = _parse_date(value, rule)
-
-    elif rule.type == "email":
+        return int(value)
+    if rule.type == "number":
+        return _parse_number(value, rule)
+    if rule.type == "boolean":
+        return _parse_boolean(value)
+    if rule.type in ("date", "datetime"):
+        return _parse_date(value, rule)
+    if rule.type == "email":
         if not isinstance(value, str) or not re.fullmatch(EMAIL_PATTERN, value):
             raise ValueError("invalid email")
-        value = value.casefold()
+        return value.casefold()
+    raise ValueError("unknown field type: " + str(rule.type))
 
-    else:
-        raise ValueError("unknown field type: " + str(rule.type))
 
-    # Categories can have French and English names for the same value.
-    if rule.categories and isinstance(value, str):
-        lookup = value.casefold()
-        mapping = {}
-        for name, standard_value in rule.categories.items():
-            mapping[str(name).casefold()] = standard_value
-        if lookup in mapping:
-            value = mapping[lookup]
-
-    # Unknown values stay in the record, but the caller adds a flag.
+def _validate_value(value, rule):
+    """Check allowed values and numeric bounds after category mapping."""
     if rule.allowed_values is not None and value not in rule.allowed_values:
         raise ValueError("value not in allowed values")
-
     if rule.min_value is not None or rule.max_value is not None:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError("number limits require a numeric field")
@@ -282,6 +261,16 @@ def _convert(value, rule):
         if rule.max_value is not None and value > rule.max_value:
             raise ValueError("value is above maximum")
 
+
+def _convert(value, rule):
+    """Convert a field into the type listed in its FieldRule."""
+    value = _convert_type(value, rule)
+    # Categories can have French and English names for the same value.
+    if rule.categories and isinstance(value, str):
+        mapping = {str(name).casefold(): standard for name, standard in rule.categories.items()}
+        value = mapping.get(value.casefold(), value)
+    # The caller keeps and flags the original value if validation fails.
+    _validate_value(value, rule)
     return value
 
 
@@ -373,83 +362,53 @@ def remove_duplicates(new_records, existing_records=None, fields=None):
     return unique, duplicates
 
 
-def clean_records(records, config, existing_records=None):
-    """Clean a new batch and compare with old records when provided.
-
-    Flagged records stay in cleaned. Duplicates go in a separate list,
-    so they can be skipped during storage without losing their details.
-    """
-
-    result = CleaningResult()
+def _historical_fingerprints(existing_records, config, fields):
+    """Prepare old records using the same cleaning rules as new ones."""
     historical = set()
-    seen_new = set()
-    fields = config.unique_by if config.unique_by else None
-
-    # Prepare old records using the exact same rules as new ones.
-    if config.remove_duplicate_records:
-        for old in existing_records or []:
-            if not isinstance(old, dict):
-                continue
-            cleaned_old, old_flags = _clean_one_record(old, config, -1)
-            if _can_compare(cleaned_old, old_flags, fields):
-                historical.add(record_fingerprint(cleaned_old, fields))
-
-    for index, original in enumerate(records):
-        if not isinstance(original, dict):
-            flag = _make_flag(index, "__record__", original, "record must be a dictionary")
-            result.flags.append(flag)
-            result.unprocessed.append({"index": index, "record": original})
+    if not config.remove_duplicate_records:
+        return historical
+    for old in existing_records or []:
+        if not isinstance(old, dict):
             continue
+        cleaned, flags = _clean_one_record(old, config, -1)
+        if _can_compare(cleaned, flags, fields):
+            historical.add(record_fingerprint(cleaned, fields))
+    return historical
 
-        cleaned, flags = _clean_one_record(original, config, index)
-        result.flags.extend(flags)
 
-        if config.remove_duplicate_records:
-            if _can_compare(cleaned, flags, fields):
-                fingerprint = record_fingerprint(cleaned, fields)
-                if fingerprint in historical:
-                    reason = "duplicate of historical record"
-                elif fingerprint in seen_new:
-                    reason = DUPLICATE_IN_BATCH_REASON
-                else:
-                    reason = None
+def _flag_missing_duplicate_key(original, cleaned, fields, index, result):
+    if fields is None:
+        return
+    missing = [name for name in fields if cleaned.get(name) is None]
+    if missing:
+        result.flags.append(
+            _make_flag(
+                index,
+                ",".join(missing),
+                {name: original.get(name) for name in missing},
+                "missing duplicate key",
+            )
+        )
 
-                if reason is not None:
-                    result.flags.append(_make_flag(index, "__record__", original, reason))
-                    result.duplicates.append(
-                        {
-                            "index": index,
-                            "record": cleaned,
-                            "reason": reason,
-                        }
-                    )
-                    continue
 
-                seen_new.add(fingerprint)
-            else:
-                # Missing deduplication fields are already flagged if required.
-                if fields is not None:
-                    missing = [name for name in fields if cleaned.get(name) is None]
-                    if missing:
-                        result.flags.append(
-                            _make_flag(
-                                index,
-                                ",".join(missing),
-                                {name: original.get(name) for name in missing},
-                                "missing duplicate key",
-                            )
-                        )
+def _duplicate_reason(cleaned, fields, historical, seen_new):
+    """Find a comparable record's duplicate source, remembering new fingerprints."""
+    fingerprint = record_fingerprint(cleaned, fields)
+    if fingerprint in historical:
+        return "duplicate of historical record"
+    if fingerprint in seen_new:
+        return DUPLICATE_IN_BATCH_REASON
+    seen_new.add(fingerprint)
+    return None
 
-        # Includes records with data quality flags, as required by PULSE.
-        result.cleaned.append(cleaned)
 
-    # Store all counts in one place so the sync service can persist them.
+def _summarize_cleaning(result, received):
+    """Store all counts in one place so the sync service can persist them."""
     for flag in result.flags:
         reason = flag["reason"]
         result.flag_counts[reason] = result.flag_counts.get(reason, 0) + 1
-
     result.stats = {
-        "received": len(records),
+        "received": received,
         "cleaned": len(result.cleaned),
         "duplicates": len(result.duplicates),
         "duplicate_in_batch": result.flag_counts.get(DUPLICATE_IN_BATCH_REASON, 0),
@@ -458,4 +417,31 @@ def clean_records(records, config, existing_records=None):
         "flag_count": len(result.flags),
         "flagged_records": len(set(flag["record_index"] for flag in result.flags)),
     }
+
+
+def clean_records(records, config, existing_records=None):
+    """Clean a batch, keeping flagged records and reporting duplicates separately."""
+    result = CleaningResult()
+    seen_new = set()
+    fields = config.unique_by if config.unique_by else None
+    historical = _historical_fingerprints(existing_records, config, fields)
+    for index, original in enumerate(records):
+        if not isinstance(original, dict):
+            flag = _make_flag(index, "__record__", original, "record must be a dictionary")
+            result.flags.append(flag)
+            result.unprocessed.append({"index": index, "record": original})
+            continue
+        cleaned, flags = _clean_one_record(original, config, index)
+        result.flags.extend(flags)
+        if config.remove_duplicate_records:
+            if _can_compare(cleaned, flags, fields):
+                reason = _duplicate_reason(cleaned, fields, historical, seen_new)
+                if reason is not None:
+                    result.flags.append(_make_flag(index, "__record__", original, reason))
+                    result.duplicates.append({"index": index, "record": cleaned, "reason": reason})
+                    continue
+            else:
+                _flag_missing_duplicate_key(original, cleaned, fields, index, result)
+        result.cleaned.append(cleaned)
+    _summarize_cleaning(result, len(records))
     return result
