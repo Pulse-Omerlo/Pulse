@@ -528,3 +528,16 @@ and prices.
 missing passwords get 401, the API receives requests without the
 `Authorization` header, and the container stops when the password is not set.
 The first real deploy is still to do.
+
+### Polars batch cleaning spike (#193)
+
+For file cleaning_dates.py
+Codex suggested adding the logic to handle ambiguous and missing or invalid timestamdps in the function _local_datetime() where I was just converting to UTC
+
+cleaning_values.py retook my previous logic I had written and just seperated it into it's own file
+
+clean_mapped AI helped refactor the function to work with the bew logic
+
+In cleaning_columns AI added missing cases where needed and the function _native_rule_supported
+
+AI helped generate the tests to be able to mark the spike as completed
