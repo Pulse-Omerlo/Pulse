@@ -6,7 +6,13 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-from app.processing.cleaning import DUPLICATE_IN_BATCH_REASON, clean_records, record_fingerprint
+import polars as pl
+
+from app.processing.cleaning import (
+    DUPLICATE_IN_BATCH_REASON,
+    clean_scalar_batch,
+    record_fingerprint,
+)
 from app.processing.cleaning_config import get_cleaning_config
 
 logger = logging.getLogger(__name__)
@@ -47,6 +53,9 @@ class MappingResult:
     cleaning_flag_counts: dict[str, int] = field(default_factory=dict)
 
 
+# AI helped me suggest better ways of coding or traversings loops I had.
+# Ai completed the function after the records were cleaned by recycling old logic and
+# making it work with the new logic.
 def clean_mapped(
     mapped: Iterable[MappedRecord], failures: Iterable[MappingFailure] = ()
 ) -> MappingResult:
@@ -54,28 +63,51 @@ def clean_mapped(
 
     A record that loses a required field is added to `failures` after the given ones.
     """
+    # Materializes the iterable into a list so we can access records by index and traverse them
     records = list(mapped)
+    # Copies the supplied mapping failures into a mutable list. Cleaning failures will be appended
+    # without modifying the callers collection.
     failed = list(failures)
+    # Starts the collection of final retained records. It remains empty if there are no valid
+    # candidates.
     cleaned: list[MappedRecord] = []
+    # Stores how many times each cleaning problem occurred:
     flag_counts: dict[str, int] = {}
-    seen: set[str] = set()
-    configs = {kind: get_cleaning_config(kind) for kind in {record.kind for record in records}}
-    # Keep the last repeat, matching the versioned upsert's last-occurrence policy.
-    for record in reversed(records):
-        config = configs[record.kind]
-        # Read only scalar columns; leave nested data untouched without copying it.
-        values = {name: getattr(record, name) for name in config.fields}
-        # No stored records: versioning alone decides whether a resync changed.
-        result = clean_records([values], config)
-        for reason, count in result.flag_counts.items():
-            flag_counts[reason] = flag_counts.get(reason, 0) + count
-        missing = [flag["field"] for flag in result.flags if flag["reason"] == MISSING_REASON]
+    # Will associate each original record position with its cleaning result
+    by_index = {}
+    # Associate each entity kind with the positions of its records.
+    groups: dict[str, list[int]] = {}
+    # Group records by kind to apply their own cleaning configurations
+    for index, record in enumerate(records):
+        groups.setdefault(record.kind, []).append(index)
+    # Get the cleaning configurations for each kind (organisation or people)
+    for kind, indices in groups.items():
+        config = get_cleaning_config(kind)
+        # Get the data
+        values = [
+            {name: getattr(records[index], name) for name in config.fields} for index in indices
+        ]
+        # Clean the whole group using Polars and connect back to their original indices using zip()
+        # (AI suggested this line of code)
+        for index, result in zip(indices, clean_scalar_batch(values, config), strict=True):
+            by_index[index] = result
+    # Initilialize cleaned MappedRecords that are now duplicate candidates
+    candidates = []
+    # Hold a fingerprint for each candiadate
+    fingerprints = []
+    # Now that records are clean, decide which cleaned records can be returned and remove dupes
+    for index in reversed(range(len(records))):
+        record = records[index]
+        value, flags = by_index[index]
+        for flag in flags:
+            reason = flag["reason"]
+            flag_counts[reason] = flag_counts.get(reason, 0) + 1
+        missing = [flag["field"] for flag in flags if flag["reason"] == MISSING_REASON]
         if missing:
             reason = "cleaning removed required fields: " + ", ".join(missing)
             logger.warning("Could not clean %s %s: %s", record.kind, record.external_id, reason)
             failed.append(MappingFailure(record.kind, record.external_id, reason))
             continue
-        value = result.cleaned[0]
         fingerprint = record_fingerprint(
             {
                 **value,
@@ -83,11 +115,14 @@ def clean_mapped(
                 "external_ids": record.external_ids,
             }
         )
-        if fingerprint in seen:
-            flag_counts[DUPLICATE_IN_BATCH_REASON] = (
-                flag_counts.get(DUPLICATE_IN_BATCH_REASON, 0) + 1
-            )
-            continue
-        seen.add(fingerprint)
-        cleaned.append(replace(record, **value))
+        fingerprints.append(fingerprint)
+        candidates.append(replace(record, **value))
+    if fingerprints:
+        # Candidates are reversed, so the first fingerprint is the last source row.
+        fingerprint_column = pl.Series("fingerprint", fingerprints, dtype=pl.String)
+        keep = fingerprint_column.is_first_distinct()
+        flag_counts[DUPLICATE_IN_BATCH_REASON] = len(candidates) - keep.sum()
+        if not flag_counts[DUPLICATE_IN_BATCH_REASON]:
+            del flag_counts[DUPLICATE_IN_BATCH_REASON]
+        cleaned = [record for record, retain in zip(candidates, keep, strict=True) if retain]
     return MappingResult(tuple(reversed(cleaned)), tuple(failed), flag_counts)
