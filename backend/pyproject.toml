@@ -32,6 +32,9 @@ dev = [
     "ruff>=0.17.1",
     "splink>=5.0.0",
 ]
+load = [
+    "locust>=2.47.0",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
