@@ -4,6 +4,7 @@ import csv
 import pytest
 
 from app.ingestion.files.columns import LAYOUTS
+from app.processing.normalization import normalize_domain
 from loadtest.make_orgs import COLUMNS, DUPLICATE_EVERY, main, make_rows
 
 
@@ -34,6 +35,17 @@ def test_ids_are_unique():
     # Assert
     ids = [row["id"] for row in rows]
     assert len(ids) == len(set(ids))
+
+
+def test_each_organization_has_its_own_domain():
+    # Arrange
+    rows = [row for row in make_rows(500) if not row["id"].endswith("-dup")]
+
+    # Act
+    domains = {normalize_domain(row["website"]) for row in rows}
+
+    # Assert
+    assert len(domains) == 500
 
 
 def test_the_same_seed_gives_the_same_rows():

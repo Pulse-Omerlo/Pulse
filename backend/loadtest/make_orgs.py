@@ -26,7 +26,9 @@ DUPLICATE_EVERY = 10
 def organization_row(number: int, rng: random.Random) -> dict[str, str]:
     """One organization; the number keeps the name, website and id unique."""
     name = f"{rng.choice(FIRST_WORDS)} {rng.choice(SECOND_WORDS)} {number}"
-    domain = f"org{number}.example.ca"
+    # Each organization needs its own registered domain: "org1.example.ca" and
+    # "org2.example.ca" would both be read as the domain "example.ca".
+    domain = f"loadorg{number}.ca"
     return {
         "id": f"load-{number}",
         "name": name,
